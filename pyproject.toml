@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xai-audit-prototype"
+version = "0.1.0"
+description = "Prototype LangGraph framework for auditing fixed tabular XAI explanations."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "langchain>=1.0.0",
+  "langgraph>=0.6.0",
+  "langchain-openai>=0.3.0",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
