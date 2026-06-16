@@ -32,13 +32,59 @@ class LocalExplanation:
 
 
 @dataclass
+class PerturbationQuestion:
+    question_id: str
+    sample_id: str
+    prompt: str
+    perturbed_instance: TabularRow
+    feature_name: str
+    feature_change: str
+    expected_label: str
+    expected_score: float
+    expected_score_direction: Literal["increase", "decrease", "no_change"]
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class SampleAuditRecord:
+    sample_id: str
+    instance: TabularRow
+    prediction: PredictionResult
+    explanation: LocalExplanation
+    perturbation_questions: list[PerturbationQuestion] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class PersonaQuestionAnswer:
+    question_id: str
+    predicted_label: str
+    predicted_score_direction: Literal["increase", "decrease", "no_change"]
+    reasoning: str
+    is_label_correct: bool = False
+    is_direction_correct: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class PersonaReview:
     persona: str
-    summary: str
+    trust_score: int
+    trust_rationale: str
+    usability_score: int
+    usability_rationale: str
+    understanding_score: int
+    understanding_summary: str
     strengths: list[str]
     concerns: list[str]
-    follow_up_questions: list[str]
-    trust_level: Literal["low", "medium", "high"]
+    question_answers: list[PersonaQuestionAnswer] = field(default_factory=list)
+    scoring_breakdown: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -60,10 +106,10 @@ class TechnicalAssessment:
 class AuditReport:
     verdict: Literal["pass", "review", "fail"]
     executive_summary: str
-    user_risks: list[str]
-    recommendations: list[str]
+    aggregate_scores: dict[str, float]
+    sampled_cases: list[SampleAuditRecord] = field(default_factory=list)
     persona_summaries: list[PersonaReview] = field(default_factory=list)
-    technical_assessment: TechnicalAssessment | None = None
+    recommendations: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

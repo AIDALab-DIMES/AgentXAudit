@@ -2,36 +2,46 @@
 
 This project implements a prototype framework for auditing the explanations emitted by a fixed explainability method on tabular data.
 
-The design follows the interaction schema you provided:
+The current workflow is validation-set driven:
 
-1. An audit coordinator initializes the shared audit state.
-2. Three simulated stakeholder persona agents query the same LLM through role-specific prompts:
+1. The LangGraph coordinator receives:
+   - a black-box tabular model
+   - a fixed explanation algorithm
+   - a validation set
+2. The coordinator selects between 5 and 10 representative samples from the validation set.
+3. For each selected sample, the framework extracts:
+   - the black-box model output
+   - the explanation method output
+   - a perturbation question whose answer can be checked against the black-box model
+4. Three persona agents review the sampled evidence:
    - data scientist
    - business executive
    - end user
-3. A technical assessor computes code-based metrics, currently:
-   - reconstruction fidelity
-   - directional faithfulness
-   - stability under local perturbations
-4. The coordinator synthesizes a final report.
+5. Each persona completes a questionnaire that assesses:
+   - trust, scored from 1 to 5
+   - usability, scored from 1 to 5
+   - understanding, measured by how well the persona predicts the black-box model output on perturbed samples
+6. The coordinator synthesizes a final report with the sampled cases, persona scores, and recommendations.
 
 The orchestration layer uses `LangGraph`, while LLM interactions use `LangChain`.
 
 ## Project Layout
 
-- `src/xai_audit/interfaces.py`: model and explainer protocols
-- `src/xai_audit/model_utils.py`: helpers for turning model outputs into auditable scores
-- `src/xai_audit/technical.py`: code-based technical metrics
-- `src/xai_audit/simple_xai.py`: a fixed black-box tabular explainer used in the demo
-- `src/xai_audit/graph.py`: LangGraph coordinator and persona workflow
+- `src/xai_audit/interfaces.py`: black-box model and explainer protocols
+- `src/xai_audit/model_utils.py`: helpers for model predictions and score extraction
+- `src/xai_audit/questionnaire.py`: validation-set sampling and perturbation-question generation
+- `src/xai_audit/graph.py`: LangGraph coordinator and persona questionnaire workflow
+- `src/xai_audit/simple_xai.py`: demo black-box model, fixed explainer, and demo validation set
+- `src/xai_audit/technical.py`: optional technical metrics retained from the earlier prototype
 - `examples/run_demo.py`: runnable demonstration
 
 ## Core Assumptions
 
 - The black-box model can be queried on one or more tabular rows.
-- The fixed XAI method returns local feature attributions for one instance.
-- The current prototype focuses on scalar tabular features. Numeric features are used for perturbation-based technical checks.
-- Technical metrics are proxy audit signals, not formal guarantees.
+- The fixed XAI method produces local explanations one sample at a time.
+- The validation set contains at least 5 tabular rows.
+- Sampled perturbation questions are generated from numeric features with strong local attribution magnitude.
+- Understanding is operationalized as persona accuracy on perturbation questions.
 
 ## Install
 
@@ -43,7 +53,7 @@ pip install -e .
 
 ## Run The Demo
 
-The demo uses LangChain's unified model initialization and defaults to an OpenAI-compatible model string:
+The demo uses LangChain's unified chat-model initialization:
 
 ```bash
 export OPENAI_API_KEY=...
@@ -51,7 +61,14 @@ export AUDIT_LLM_MODEL="openai:gpt-4.1-mini"
 PYTHONPATH=src python3 examples/run_demo.py
 ```
 
-You can swap the provider-backed LLM by changing `AUDIT_LLM_MODEL`, as long as the corresponding LangChain integration package is installed.
+The demo prints a JSON structure containing:
+
+- the sampled validation cases
+- the original model outputs
+- the explanation outputs
+- the perturbation questions
+- persona trust, usability, and understanding results
+- the synthesized final report
 
 ## Using Your Own Model And Explainer
 
@@ -60,9 +77,10 @@ Implement these two protocols:
 - `TabularBlackBoxModel`
 - `FixedTabularExplainer`
 
-Then pass them to `AuditCoordinator.audit(...)`.
+Then call `AuditCoordinator.audit(...)` with your validation set.
 
 ## Notes
 
-- The prototype is intentionally small and explainable.
-- It is designed to be extended with stronger fidelity tests, additional personas, and richer report schemas.
+- Sample selection is deterministic and score-spread based.
+- The understanding score is derived automatically from persona quiz accuracy, then mapped to a 1 to 5 scale.
+- The prototype is intentionally compact so you can swap in stronger explainers, richer questionnaires, or more sophisticated sample selection later.

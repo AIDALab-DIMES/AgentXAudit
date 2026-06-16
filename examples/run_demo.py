@@ -4,17 +4,21 @@ import json
 import os
 import sys
 
-from langchain_ollama import OllamaLLM
+from langchain.chat_models import init_chat_model
 
 from xai_audit.graph import AuditCoordinator
-from xai_audit.simple_xai import FiniteDifferenceTabularExplainer, ToyCreditRiskModel
+from xai_audit.simple_xai import (
+    FiniteDifferenceTabularExplainer,
+    ToyCreditRiskModel,
+    build_demo_validation_set,
+)
 
 
 def main() -> int:
-    model_spec = os.environ.get("AUDIT_LLM_MODEL", "gemma3")
+    model_spec = os.environ.get("AUDIT_LLM_MODEL", "openai:gpt-4.1-mini")
 
     try:
-        llm = OllamaLLM(model="gemma3:latest")
+        llm = init_chat_model(model_spec)
     except Exception as exc:  # pragma: no cover - demo bootstrap path
         print(
             "Failed to initialize the LangChain chat model.\n"
@@ -27,6 +31,7 @@ def main() -> int:
     predictor = ToyCreditRiskModel()
     explainer = FiniteDifferenceTabularExplainer()
     coordinator = AuditCoordinator(llm=llm)
+    validation_set = build_demo_validation_set()
 
     reference_row = {
         "income_k": 55.0,
@@ -35,25 +40,19 @@ def main() -> int:
         "missed_payments": 1.0,
         "age": 40.0,
     }
-    instance = {
-        "income_k": 42.0,
-        "debt_ratio": 0.48,
-        "savings_k": 6.0,
-        "missed_payments": 2.0,
-        "age": 29.0,
-    }
     user_query = (
-        "Audit whether this explanation would be appropriate to show to internal reviewers "
-        "and to the customer affected by the credit decision."
+        "Audit whether these validation-set explanations are trustworthy, usable, and understandable "
+        "for internal reviewers and for a customer affected by the credit decision."
     )
 
     result = coordinator.audit(
         user_query=user_query,
-        instance=instance,
+        validation_set=validation_set,
         model=predictor,
         explainer=explainer,
         reference_row=reference_row,
         focus_label="approve",
+        sample_count=5,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0

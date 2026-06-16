@@ -133,6 +133,19 @@ class ToyCreditRiskModel:
         return 1.0 / (1.0 + exp(-logit))
 
 
+def build_demo_validation_set() -> list[TabularRow]:
+    return [
+        {"income_k": 28.0, "debt_ratio": 0.62, "savings_k": 1.5, "missed_payments": 3.0, "age": 24.0},
+        {"income_k": 35.0, "debt_ratio": 0.51, "savings_k": 4.0, "missed_payments": 2.0, "age": 31.0},
+        {"income_k": 42.0, "debt_ratio": 0.48, "savings_k": 6.0, "missed_payments": 2.0, "age": 29.0},
+        {"income_k": 46.0, "debt_ratio": 0.39, "savings_k": 8.0, "missed_payments": 1.0, "age": 34.0},
+        {"income_k": 52.0, "debt_ratio": 0.36, "savings_k": 10.0, "missed_payments": 1.0, "age": 38.0},
+        {"income_k": 58.0, "debt_ratio": 0.31, "savings_k": 14.0, "missed_payments": 1.0, "age": 41.0},
+        {"income_k": 64.0, "debt_ratio": 0.28, "savings_k": 18.0, "missed_payments": 0.0, "age": 45.0},
+        {"income_k": 72.0, "debt_ratio": 0.22, "savings_k": 26.0, "missed_payments": 0.0, "age": 49.0},
+    ]
+
+
 def _zero_reference(instance: TabularRow) -> TabularRow:
     reference: TabularRow = {}
     for feature, value in instance.items():
