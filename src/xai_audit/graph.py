@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import operator
 from dataclasses import asdict, dataclass, is_dataclass
 from typing import Any, Annotated, Literal, TypedDict
@@ -10,6 +9,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import END, START, StateGraph
 from langgraph.runtime import Runtime
 
+from .csv_export import build_csv_artifact
 from .interfaces import FixedTabularExplainer, TabularBlackBoxModel
 from .persona_processing import aggregate_scores, compose_persona_reviews
 from .questionnaire import (
@@ -17,7 +17,7 @@ from .questionnaire import (
     build_persona_stage_packet,
     build_sample_audit_records,
 )
-from .types import AuditReport, PersonaReview, TabularRow
+from .types import AuditCsvArtifact, TabularRow
 
 
 class AuditState(TypedDict, total=False):
@@ -25,9 +25,10 @@ class AuditState(TypedDict, total=False):
     validation_set: list[TabularRow]
     focus_label: str | None
     sample_count: int
+    csv_output_path: str | None
     sampled_cases: list[dict[str, Any]]
     interaction_records: Annotated[list[dict[str, Any]], operator.add]
-    final_report: dict[str, Any]
+    csv_artifact: dict[str, Any]
 
 
 @dataclass
@@ -67,13 +68,6 @@ class UnderstandingQuestionAnswerSchema:
     question_id: str
     predicted_label: str
     predicted_score_direction: Literal["increase", "decrease", "no_change"]
-
-
-@dataclass
-class FinalReportSchema:
-    verdict: Literal["pass", "review", "fail"]
-    executive_summary: str
-    recommendations: list[str]
 
 
 PERSONA_PROMPTS = {
@@ -137,10 +131,10 @@ def build_audit_graph() -> Any:
         builder.add_edge(usability_node, understanding_node)
         terminal_nodes.append(understanding_node)
 
-    builder.add_node("synthesize_report", _synthesize_report)
+    builder.add_node("build_csv_output", _build_csv_output)
     builder.add_edge(START, "initialize_audit")
-    builder.add_edge(terminal_nodes, "synthesize_report")
-    builder.add_edge("synthesize_report", END)
+    builder.add_edge(terminal_nodes, "build_csv_output")
+    builder.add_edge("build_csv_output", END)
     return builder.compile()
 
 
@@ -164,6 +158,7 @@ class AuditCoordinator:
         explainer: FixedTabularExplainer,
         focus_label: str | None = None,
         sample_count: int | None = None,
+        csv_output_path: str | None = None,
     ) -> dict[str, Any]:
         context = AuditRuntimeContext(
             llm=self._llm,
@@ -175,6 +170,7 @@ class AuditCoordinator:
             "validation_set": validation_set,
             "focus_label": focus_label,
             "sample_count": sample_count or self._sample_count,
+            "csv_output_path": csv_output_path,
             "interaction_records": [],
         }
         return self._graph.invoke(initial_state, context=context)
@@ -334,62 +330,20 @@ Coordinator request:
     return {"interaction_records": interaction_records}
 
 
-def _synthesize_report(state: AuditState, runtime: Runtime[AuditRuntimeContext]) -> dict[str, Any]:
+def _build_csv_output(state: AuditState, runtime: Runtime[AuditRuntimeContext]) -> dict[str, Any]:
     persona_reviews = compose_persona_reviews(
         state.get("interaction_records", []),
         state.get("sampled_cases", []),
     )
     aggregate = aggregate_scores(persona_reviews)
-    persona_review_summaries = [_persona_review_summary(review) for review in persona_reviews]
-
-    llm = _bounded_structured_llm(runtime.context.llm, FinalReportSchema, max_tokens=220)
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                """
-You are the audit coordinator synthesizing a final report about a tabular explanation method.
-The persona evaluations were performed iteratively in separate trust, usability, and understanding interactions over the same sampled validation cases.
-Use this staged evidence to produce a concise decision-oriented synthesis.
-                """.strip(),
-            ),
-            (
-                "human",
-                """
-Prepare the final audit report.
-
-User query:
-{user_query}
-
-Aggregate scores:
-{aggregate_scores}
-
-Persona reviews:
-{persona_reviews}
-
-Return a verdict, an executive summary, and actionable recommendations.
-                """.strip(),
-            ),
-        ]
-    )
-    chain = prompt | llm
-    report = chain.invoke(
-        {
-            "user_query": state["user_query"],
-            "aggregate_scores": json.dumps(aggregate, indent=2, sort_keys=True),
-            "persona_reviews": json.dumps(persona_review_summaries, indent=2, sort_keys=True),
-        }
-    )
-    normalized = _normalize_result(report)
-    final_report = AuditReport(
-        verdict=normalized["verdict"],
-        executive_summary=normalized["executive_summary"],
+    csv_artifact = build_csv_artifact(
+        interaction_records=state.get("interaction_records", []),
+        persona_reviews=persona_reviews,
         aggregate_scores=aggregate,
         sampled_cases=_dicts_to_sample_records(state.get("sampled_cases", [])),
-        persona_summaries=persona_reviews,
-        recommendations=normalized.get("recommendations", []),
+        csv_path=state.get("csv_output_path"),
     )
-    return {"final_report": final_report.to_dict()}
+    return {"csv_artifact": csv_artifact.to_dict()}
 
 
 def _build_coordinator_prompt(
@@ -430,21 +384,6 @@ def _bounded_structured_llm(llm: BaseChatModel, schema: type[Any], max_tokens: i
 
 def _persona_key_from_name(persona_name: str) -> str:
     return persona_name.replace(" ", "_")
-
-
-def _persona_review_summary(review: PersonaReview) -> dict[str, Any]:
-    return {
-        "persona": review.persona,
-        "trust_score": review.trust_score,
-        "trust_rationale": review.trust_rationale,
-        "usability_score": review.usability_score,
-        "usability_rationale": review.usability_rationale,
-        "understanding_score": review.understanding_score,
-        "understanding_summary": review.understanding_summary,
-        "strengths": review.strengths,
-        "concerns": review.concerns,
-        "scoring_breakdown": review.scoring_breakdown,
-    }
 
 
 def _dicts_to_sample_records(payload: list[dict[str, Any]]):

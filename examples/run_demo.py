@@ -32,14 +32,6 @@ def main() -> int:
     explainer = FiniteDifferenceTabularExplainer()
     coordinator = AuditCoordinator(llm=llm)
     validation_set = build_demo_validation_set()
-
-    reference_row = {
-        "income_k": 55.0,
-        "debt_ratio": 0.35,
-        "savings_k": 12.0,
-        "missed_payments": 1.0,
-        "age": 40.0,
-    }
     user_query = (
         "Audit whether these validation-set explanations are trustworthy, usable, and understandable "
         "for internal reviewers and for a customer affected by the credit decision."
@@ -50,11 +42,11 @@ def main() -> int:
         validation_set=validation_set,
         model=predictor,
         explainer=explainer,
-        reference_row=reference_row,
         focus_label="approve",
         sample_count=5,
+        csv_output_path="audit_outcomes.csv",
     )
-    print(json.dumps(result, indent=2, sort_keys=True))
+    print(json.dumps({"csv_path": result["csv_artifact"]["csv_path"]}, indent=2, sort_keys=True))
     return 0
 
 

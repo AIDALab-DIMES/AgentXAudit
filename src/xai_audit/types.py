@@ -103,25 +103,47 @@ class PersonaReview:
 
 
 @dataclass
-class TechnicalAssessment:
-    reconstruction_fidelity: float | None
-    directional_faithfulness: float | None
-    stability: float | None
-    notes: list[str] = field(default_factory=list)
-    diagnostics: dict[str, Any] = field(default_factory=dict)
+class AuditCsvRow:
+    row_type: Literal["stage", "interaction", "overall"]
+    persona: str
+    stage: str
+    aspect: str
+    score: float | None = None
+    summary: str = ""
+    sample_id: str = ""
+    question_id: str = ""
+    predicted_label: str = ""
+    predicted_score_direction: str = ""
+    is_label_correct: str = ""
+    is_direction_correct: str = ""
+    accuracy: float | None = None
+    strengths: str = ""
+    concerns: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
 @dataclass
-class AuditReport:
-    verdict: Literal["pass", "review", "fail"]
-    executive_summary: str
+class AuditCsvArtifact:
+    csv_content: str
+    csv_rows: list[AuditCsvRow]
     aggregate_scores: dict[str, float]
-    sampled_cases: list[SampleAuditRecord] = field(default_factory=list)
     persona_summaries: list[PersonaReview] = field(default_factory=list)
-    recommendations: list[str] = field(default_factory=list)
+    sampled_cases: list[SampleAuditRecord] = field(default_factory=list)
+    csv_path: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class TechnicalAssessment:
+    reconstruction_fidelity: float | None
+    directional_faithfulness: float | None
+    stability: float | None
+    notes: list[str] = field(default_factory=list)
+    diagnostics: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

@@ -22,7 +22,7 @@ The current workflow is validation-set driven and iterative:
    - usability evaluation only
    - understanding evaluation only
 6. Understanding is measured by how well the persona predicts the black-box model output on perturbed samples.
-7. The coordinator synthesizes a final report with the sampled cases, staged persona results, and recommendations.
+7. The coordinator exports a CSV with staged persona outcomes and overall aspect scores.
 
 The orchestration layer uses `LangGraph`, while LLM interactions use `LangChain`.
 
@@ -32,6 +32,7 @@ The orchestration layer uses `LangGraph`, while LLM interactions use `LangChain`
 - `src/xai_audit/model_utils.py`: helpers for model predictions and score extraction
 - `src/xai_audit/questionnaire.py`: validation-set sampling and perturbation-question generation
 - `src/xai_audit/persona_processing.py`: iterative persona-response grading and aggregation
+- `src/xai_audit/csv_export.py`: deterministic CSV generation for stage outcomes and overall scores
 - `src/xai_audit/graph.py`: LangGraph coordinator and staged persona workflow
 - `src/xai_audit/simple_xai.py`: demo black-box model, fixed explainer, and demo validation set
 - `src/xai_audit/technical.py`: optional technical metrics retained from the earlier prototype
@@ -63,14 +64,14 @@ export AUDIT_LLM_MODEL="openai:gpt-4.1-mini"
 PYTHONPATH=src python3 examples/run_demo.py
 ```
 
-The demo prints a JSON structure containing:
+The demo writes `audit_outcomes.csv` and prints its path.
 
-- the sampled validation cases
-- the original model outputs
-- the explanation outputs
-- the perturbation questions
-- staged trust, usability, and understanding persona results
-- the synthesized final report
+The CSV contains:
+
+- one row for each persona-stage outcome
+- one row for each understanding-question interaction
+- one row for the understanding observation interaction
+- one overall row for each evaluated aspect: trust, usability, understanding
 
 ## Using Your Own Model And Explainer
 
@@ -79,11 +80,12 @@ Implement these two protocols:
 - `TabularBlackBoxModel`
 - `FixedTabularExplainer`
 
-Then call `AuditCoordinator.audit(...)` with your validation set.
+Then call `AuditCoordinator.audit(...)` with your validation set. If you want a file written automatically, pass `csv_output_path=...`.
 
 ## Notes
 
 - Sample selection is deterministic and score-spread based.
 - Trust, usability, and understanding are evaluated one at a time in separate coordinator-persona interactions.
 - The understanding score is derived automatically from persona quiz accuracy, then mapped to a 1 to 5 scale.
+- No LLM-based final report is generated; the final artifact is a deterministic CSV.
 - The prototype is intentionally compact so you can swap in stronger explainers, richer questionnaires, or more sophisticated sample selection later.

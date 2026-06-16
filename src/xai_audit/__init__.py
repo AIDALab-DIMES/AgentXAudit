@@ -1,10 +1,12 @@
+from .csv_export import build_csv_artifact
 from .interfaces import FixedTabularExplainer, TabularBlackBoxModel
 from .persona_processing import aggregate_scores, compose_persona_reviews
 from .questionnaire import ValidationSamplingConfig, build_sample_audit_records
 from .simple_xai import FiniteDifferenceTabularExplainer, ToyCreditRiskModel, build_demo_validation_set
 from .technical import TechnicalAssessor, TechnicalAssessmentConfig
 from .types import (
-    AuditReport,
+    AuditCsvArtifact,
+    AuditCsvRow,
     LocalExplanation,
     PersonaEvaluationInteraction,
     PersonaQuestionAnswer,
@@ -25,7 +27,8 @@ except ImportError:  # Optional until LangChain/LangGraph dependencies are insta
 __all__ = [
     "AuditCoordinator",
     "AuditRuntimeContext",
-    "AuditReport",
+    "AuditCsvArtifact",
+    "AuditCsvRow",
     "FixedTabularExplainer",
     "FiniteDifferenceTabularExplainer",
     "LocalExplanation",
@@ -42,6 +45,7 @@ __all__ = [
     "ToyCreditRiskModel",
     "ValidationSamplingConfig",
     "aggregate_scores",
+    "build_csv_artifact",
     "build_demo_validation_set",
     "build_audit_graph",
     "build_sample_audit_records",
