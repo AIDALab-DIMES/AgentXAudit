@@ -12,7 +12,11 @@ from langgraph.runtime import Runtime
 
 from .interfaces import FixedTabularExplainer, TabularBlackBoxModel
 from .persona_processing import aggregate_scores, compose_persona_reviews
-from .questionnaire import ValidationSamplingConfig, build_sample_audit_records, user_visible_records
+from .questionnaire import (
+    ValidationSamplingConfig,
+    build_persona_stage_packet,
+    build_sample_audit_records,
+)
 from .types import AuditReport, PersonaReview, TabularRow
 
 
@@ -208,11 +212,14 @@ Coordinator request:
                 ),
             ]
         )
-        visible_cases = user_visible_records(_dicts_to_sample_records(state["sampled_cases"]))
+        prompt_packet = build_persona_stage_packet(
+            _dicts_to_sample_records(state["sampled_cases"]),
+            dimension=dimension,
+        )
         coordinator_prompt = _build_coordinator_prompt(
             dimension=dimension,
             user_query=state["user_query"],
-            sampled_cases=visible_cases,
+            sampled_cases_text=prompt_packet,
         )
         chain = prompt | llm
         response = chain.invoke({"coordinator_prompt": coordinator_prompt})
@@ -235,6 +242,7 @@ def _synthesize_report(state: AuditState, runtime: Runtime[AuditRuntimeContext])
         state.get("sampled_cases", []),
     )
     aggregate = aggregate_scores(persona_reviews)
+    persona_review_summaries = [_persona_review_summary(review) for review in persona_reviews]
 
     llm = runtime.context.llm.with_structured_output(FinalReportSchema)
     prompt = ChatPromptTemplate.from_messages(
@@ -271,7 +279,7 @@ Return a verdict, an executive summary, and actionable recommendations.
         {
             "user_query": state["user_query"],
             "aggregate_scores": json.dumps(aggregate, indent=2, sort_keys=True),
-            "persona_reviews": json.dumps([review.to_dict() for review in persona_reviews], indent=2, sort_keys=True),
+            "persona_reviews": json.dumps(persona_review_summaries, indent=2, sort_keys=True),
         }
     )
     normalized = _normalize_result(report)
@@ -290,14 +298,14 @@ def _build_coordinator_prompt(
     *,
     dimension: str,
     user_query: str,
-    sampled_cases: list[dict[str, object]],
+    sampled_cases_text: str,
 ) -> str:
     return (
         f"User query:\n{user_query}\n\n"
         f"Evaluation dimension:\n{dimension}\n\n"
         f"Stage instructions:\n{DIMENSION_INSTRUCTIONS[dimension]}\n\n"
         "Use the exact same sampled validation cases used in the other stages of this audit.\n\n"
-        f"Sampled cases with black-box outputs and explanation outputs:\n{json.dumps(sampled_cases, indent=2, sort_keys=True)}"
+        f"Sampled cases with black-box outputs and explanation outputs:\n{sampled_cases_text}"
     )
 
 
@@ -309,6 +317,21 @@ def _normalize_result(result: Any) -> dict[str, Any]:
     if isinstance(result, dict):
         return result
     raise TypeError(f"Unsupported structured output type: {type(result)!r}")
+
+
+def _persona_review_summary(review: PersonaReview) -> dict[str, Any]:
+    return {
+        "persona": review.persona,
+        "trust_score": review.trust_score,
+        "trust_rationale": review.trust_rationale,
+        "usability_score": review.usability_score,
+        "usability_rationale": review.usability_rationale,
+        "understanding_score": review.understanding_score,
+        "understanding_summary": review.understanding_summary,
+        "strengths": review.strengths,
+        "concerns": review.concerns,
+        "scoring_breakdown": review.scoring_breakdown,
+    }
 
 
 def _dicts_to_sample_records(payload: list[dict[str, Any]]):

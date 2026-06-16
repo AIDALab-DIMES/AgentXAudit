@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import floor
-from typing import Sequence
+from typing import Literal, Sequence
 
 from .interfaces import FixedTabularExplainer, TabularBlackBoxModel
 from .model_utils import is_numeric, predict_single
@@ -180,7 +180,61 @@ def user_visible_records(records: Sequence[SampleAuditRecord]) -> list[dict[str,
     ]
 
 
+def build_persona_stage_packet(
+    records: Sequence[SampleAuditRecord],
+    *,
+    dimension: Literal["trust", "usability", "understanding"],
+    top_attributions: int = 3,
+) -> str:
+    sections: list[str] = []
+    for record in records:
+        model_output = f"label={record.prediction.label}, score={record.prediction.score:.3f}"
+        top_features = _format_top_attributions(record, top_attributions)
+        explanation_line = (
+            record.explanation.explanation_text
+            if record.explanation.explanation_text
+            else "No natural-language explanation text provided."
+        )
+
+        lines = [
+            f"{record.sample_id}",
+            f"instance: {_format_instance(record.instance)}",
+            f"model_output: {model_output}",
+            f"top_attributions: {top_features}",
+            f"explanation_summary: {explanation_line}",
+        ]
+
+        if dimension == "understanding":
+            for question in record.perturbation_questions:
+                lines.append(f"question {question.question_id}: {question.prompt}")
+
+        sections.append("\n".join(lines))
+
+    return "\n\n".join(sections)
+
+
 def _score_direction(delta: float) -> str:
     if abs(delta) < 1e-6:
         return "no_change"
     return "increase" if delta > 0 else "decrease"
+
+
+def _format_instance(instance: TabularRow) -> str:
+    return ", ".join(f"{key}={_format_scalar(value)}" for key, value in instance.items())
+
+
+def _format_scalar(value: object) -> str:
+    if isinstance(value, float):
+        return f"{value:.3f}"
+    return str(value)
+
+
+def _format_top_attributions(record: SampleAuditRecord, limit: int) -> str:
+    ranked = sorted(
+        record.explanation.feature_attributions.items(),
+        key=lambda item: abs(item[1]),
+        reverse=True,
+    )[:limit]
+    if not ranked:
+        return "none"
+    return ", ".join(f"{feature}={value:.3f}" for feature, value in ranked)
