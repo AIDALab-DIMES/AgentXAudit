@@ -19,7 +19,6 @@ from .types import AuditReport, PersonaReview, TabularRow
 class AuditState(TypedDict, total=False):
     user_query: str
     validation_set: list[TabularRow]
-    reference_row: TabularRow | None
     focus_label: str | None
     sample_count: int
     sampled_cases: list[dict[str, Any]]
@@ -161,7 +160,6 @@ class AuditCoordinator:
         validation_set: list[TabularRow],
         model: TabularBlackBoxModel,
         explainer: FixedTabularExplainer,
-        reference_row: TabularRow | None = None,
         focus_label: str | None = None,
         sample_count: int | None = None,
     ) -> dict[str, Any]:
@@ -173,7 +171,6 @@ class AuditCoordinator:
         initial_state: AuditState = {
             "user_query": user_query,
             "validation_set": validation_set,
-            "reference_row": reference_row,
             "focus_label": focus_label,
             "sample_count": sample_count or self._sample_count,
             "interaction_records": [],
@@ -187,7 +184,6 @@ def _initialize_audit(state: AuditState, runtime: Runtime[AuditRuntimeContext]) 
         explainer=runtime.context.explainer,
         validation_set=state["validation_set"],
         config=ValidationSamplingConfig(sample_count=state["sample_count"]),
-        reference_row=state.get("reference_row"),
         focus_label=state.get("focus_label"),
     )
     return {"sampled_cases": [record.to_dict() for record in records]}
