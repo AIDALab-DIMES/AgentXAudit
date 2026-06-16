@@ -23,7 +23,6 @@ from .types import AuditReport, PersonaReview, TabularRow
 class AuditState(TypedDict, total=False):
     user_query: str
     validation_set: list[TabularRow]
-    reference_row: TabularRow | None
     focus_label: str | None
     sample_count: int
     sampled_cases: list[dict[str, Any]]
@@ -165,7 +164,6 @@ class AuditCoordinator:
         validation_set: list[TabularRow],
         model: TabularBlackBoxModel,
         explainer: FixedTabularExplainer,
-        reference_row: TabularRow | None = None,
         focus_label: str | None = None,
         sample_count: int | None = None,
     ) -> dict[str, Any]:
