@@ -175,7 +175,6 @@ class AuditCoordinator:
         initial_state: AuditState = {
             "user_query": user_query,
             "validation_set": validation_set,
-            "reference_row": reference_row,
             "focus_label": focus_label,
             "sample_count": sample_count or self._sample_count,
             "interaction_records": [],
@@ -189,7 +188,6 @@ def _initialize_audit(state: AuditState, runtime: Runtime[AuditRuntimeContext]) 
         explainer=runtime.context.explainer,
         validation_set=state["validation_set"],
         config=ValidationSamplingConfig(sample_count=state["sample_count"]),
-        reference_row=state.get("reference_row"),
         focus_label=state.get("focus_label"),
     )
     return {"sampled_cases": [record.to_dict() for record in records]}
