@@ -2,7 +2,7 @@
 
 This project implements a prototype framework for auditing the explanations emitted by a fixed explainability method on tabular data.
 
-The current workflow is validation-set driven:
+The current workflow is validation-set driven and iterative:
 
 1. The LangGraph coordinator receives:
    - a black-box tabular model
@@ -13,15 +13,16 @@ The current workflow is validation-set driven:
    - the black-box model output
    - the explanation method output
    - a perturbation question whose answer can be checked against the black-box model
-4. Three persona agents review the sampled evidence:
+4. Three persona agents review the same sampled evidence:
    - data scientist
    - business executive
    - end user
-5. Each persona completes a questionnaire that assesses:
-   - trust, scored from 1 to 5
-   - usability, scored from 1 to 5
-   - understanding, measured by how well the persona predicts the black-box model output on perturbed samples
-6. The coordinator synthesizes a final report with the sampled cases, persona scores, and recommendations.
+5. For each persona, the audit coordinator runs three separate interactions over the same validation samples:
+   - trust evaluation only
+   - usability evaluation only
+   - understanding evaluation only
+6. Understanding is measured by how well the persona predicts the black-box model output on perturbed samples.
+7. The coordinator synthesizes a final report with the sampled cases, staged persona results, and recommendations.
 
 The orchestration layer uses `LangGraph`, while LLM interactions use `LangChain`.
 
@@ -30,7 +31,8 @@ The orchestration layer uses `LangGraph`, while LLM interactions use `LangChain`
 - `src/xai_audit/interfaces.py`: black-box model and explainer protocols
 - `src/xai_audit/model_utils.py`: helpers for model predictions and score extraction
 - `src/xai_audit/questionnaire.py`: validation-set sampling and perturbation-question generation
-- `src/xai_audit/graph.py`: LangGraph coordinator and persona questionnaire workflow
+- `src/xai_audit/persona_processing.py`: iterative persona-response grading and aggregation
+- `src/xai_audit/graph.py`: LangGraph coordinator and staged persona workflow
 - `src/xai_audit/simple_xai.py`: demo black-box model, fixed explainer, and demo validation set
 - `src/xai_audit/technical.py`: optional technical metrics retained from the earlier prototype
 - `examples/run_demo.py`: runnable demonstration
@@ -67,7 +69,7 @@ The demo prints a JSON structure containing:
 - the original model outputs
 - the explanation outputs
 - the perturbation questions
-- persona trust, usability, and understanding results
+- staged trust, usability, and understanding persona results
 - the synthesized final report
 
 ## Using Your Own Model And Explainer
@@ -82,5 +84,6 @@ Then call `AuditCoordinator.audit(...)` with your validation set.
 ## Notes
 
 - Sample selection is deterministic and score-spread based.
+- Trust, usability, and understanding are evaluated one at a time in separate coordinator-persona interactions.
 - The understanding score is derived automatically from persona quiz accuracy, then mapped to a 1 to 5 scale.
 - The prototype is intentionally compact so you can swap in stronger explainers, richer questionnaires, or more sophisticated sample selection later.

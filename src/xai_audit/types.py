@@ -73,6 +73,17 @@ class PersonaQuestionAnswer:
 
 
 @dataclass
+class PersonaEvaluationInteraction:
+    persona: str
+    dimension: Literal["trust", "usability", "understanding"]
+    coordinator_prompt: str
+    persona_response: dict[str, Any]
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class PersonaReview:
     persona: str
     trust_score: int
@@ -85,6 +96,7 @@ class PersonaReview:
     concerns: list[str]
     question_answers: list[PersonaQuestionAnswer] = field(default_factory=list)
     scoring_breakdown: dict[str, Any] = field(default_factory=dict)
+    interaction_history: list[PersonaEvaluationInteraction] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

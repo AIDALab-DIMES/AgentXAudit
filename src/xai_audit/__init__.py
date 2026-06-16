@@ -1,10 +1,12 @@
 from .interfaces import FixedTabularExplainer, TabularBlackBoxModel
+from .persona_processing import aggregate_scores, compose_persona_reviews
 from .questionnaire import ValidationSamplingConfig, build_sample_audit_records
 from .simple_xai import FiniteDifferenceTabularExplainer, ToyCreditRiskModel, build_demo_validation_set
 from .technical import TechnicalAssessor, TechnicalAssessmentConfig
 from .types import (
     AuditReport,
     LocalExplanation,
+    PersonaEvaluationInteraction,
     PersonaQuestionAnswer,
     PersonaReview,
     PerturbationQuestion,
@@ -27,6 +29,7 @@ __all__ = [
     "FixedTabularExplainer",
     "FiniteDifferenceTabularExplainer",
     "LocalExplanation",
+    "PersonaEvaluationInteraction",
     "PersonaQuestionAnswer",
     "PersonaReview",
     "PerturbationQuestion",
@@ -38,7 +41,9 @@ __all__ = [
     "TechnicalAssessor",
     "ToyCreditRiskModel",
     "ValidationSamplingConfig",
+    "aggregate_scores",
     "build_demo_validation_set",
     "build_audit_graph",
     "build_sample_audit_records",
+    "compose_persona_reviews",
 ]

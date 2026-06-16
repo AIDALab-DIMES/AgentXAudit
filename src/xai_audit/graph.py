@@ -11,8 +11,9 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.runtime import Runtime
 
 from .interfaces import FixedTabularExplainer, TabularBlackBoxModel
+from .persona_processing import aggregate_scores, compose_persona_reviews
 from .questionnaire import ValidationSamplingConfig, build_sample_audit_records, user_visible_records
-from .types import AuditReport, PersonaQuestionAnswer, PersonaReview, PredictionResult, TabularRow
+from .types import AuditReport, PersonaReview, TabularRow
 
 
 class AuditState(TypedDict, total=False):
@@ -22,7 +23,7 @@ class AuditState(TypedDict, total=False):
     focus_label: str | None
     sample_count: int
     sampled_cases: list[dict[str, Any]]
-    persona_reviews: Annotated[list[dict[str, Any]], operator.add]
+    interaction_records: Annotated[list[dict[str, Any]], operator.add]
     final_report: dict[str, Any]
 
 
@@ -34,6 +35,24 @@ class AuditRuntimeContext:
 
 
 @dataclass
+class TrustEvaluationSchema:
+    persona: str
+    trust_score: int
+    trust_rationale: str
+    strengths: list[str]
+    concerns: list[str]
+
+
+@dataclass
+class UsabilityEvaluationSchema:
+    persona: str
+    usability_score: int
+    usability_rationale: str
+    strengths: list[str]
+    concerns: list[str]
+
+
+@dataclass
 class PersonaQuestionAnswerSchema:
     question_id: str
     predicted_label: str
@@ -42,15 +61,9 @@ class PersonaQuestionAnswerSchema:
 
 
 @dataclass
-class PersonaQuestionnaireSchema:
+class UnderstandingEvaluationSchema:
     persona: str
-    trust_score: int
-    trust_rationale: str
-    usability_score: int
-    usability_rationale: str
     understanding_observations: str
-    strengths: list[str]
-    concerns: list[str]
     question_answers: list[PersonaQuestionAnswerSchema]
 
 
@@ -64,46 +77,68 @@ class FinalReportSchema:
 PERSONA_PROMPTS = {
     "data_scientist": """
 You are simulating a senior data scientist auditing a tabular explainability workflow.
-Use the sampled validation cases, black-box outputs, and explanation outputs to judge whether the explanation method is credible,
-diagnostically useful, and consistent enough to support practitioner trust.
-Score trust and usability from 1 to 5, where 1 is very poor and 5 is very strong.
-Then answer each perturbation question by predicting the black-box model's likely output.
+Ground all judgments in the sampled validation cases, black-box outputs, and explanation outputs.
+Be concrete, evidence-based, and appropriately critical.
 """.strip(),
     "business_executive": """
 You are simulating a business executive reviewing whether a tabular explanation method is decision-ready.
-Use the sampled cases to judge whether leaders could rely on these explanations in operations, governance, and communication.
-Score trust and usability from 1 to 5, where 1 is very poor and 5 is very strong.
-Then answer each perturbation question by predicting the black-box model's likely output.
+Ground all judgments in the sampled validation cases, black-box outputs, and explanation outputs.
+Be concise, practical, and risk-aware.
 """.strip(),
     "end_user": """
 You are simulating an end user affected by model-based decisions.
-Use the sampled cases to judge whether the model outputs and explanations would feel understandable, fair, and actionable.
-Score trust and usability from 1 to 5, where 1 is very poor and 5 is very strong.
-Then answer each perturbation question by predicting the black-box model's likely output.
+Ground all judgments in the sampled validation cases, black-box outputs, and explanation outputs.
+Focus on clarity, fairness, and actionability.
 """.strip(),
 }
+
+DIMENSION_INSTRUCTIONS = {
+    "trust": """
+This interaction evaluates trust only.
+Score trust from 1 to 5, where 1 means very low trust and 5 means very high trust.
+Do not evaluate usability or model understanding here.
+Return evidence-based strengths and concerns related only to trust.
+""".strip(),
+    "usability": """
+This interaction evaluates usability only.
+Score usability from 1 to 5, where 1 means very poor usability and 5 means very strong usability.
+Do not evaluate trust or model understanding here.
+Return evidence-based strengths and concerns related only to usability.
+""".strip(),
+    "understanding": """
+This interaction evaluates model understanding only.
+Do not score trust or usability here.
+Answer every perturbation question by predicting the black-box model's likely label and whether the focal score would increase, decrease, or stay about the same.
+Use only these values for predicted_score_direction: increase, decrease, no_change.
+Also provide a short observation about how understandable the model behavior felt from the sampled evidence.
+""".strip(),
+}
+
+PERSONA_ORDER = ("data_scientist", "business_executive", "end_user")
 
 
 def build_audit_graph() -> Any:
     builder = StateGraph(AuditState, context_schema=AuditRuntimeContext)
     builder.add_node("initialize_audit", _initialize_audit)
-    builder.add_node("data_scientist_review", _persona_node("data_scientist"))
-    builder.add_node("business_executive_review", _persona_node("business_executive"))
-    builder.add_node("end_user_review", _persona_node("end_user"))
-    builder.add_node("synthesize_report", _synthesize_report)
 
+    terminal_nodes: list[str] = []
+    for persona_key in PERSONA_ORDER:
+        trust_node = f"{persona_key}_trust_review"
+        usability_node = f"{persona_key}_usability_review"
+        understanding_node = f"{persona_key}_understanding_review"
+
+        builder.add_node(trust_node, _stage_node(persona_key, "trust", TrustEvaluationSchema))
+        builder.add_node(usability_node, _stage_node(persona_key, "usability", UsabilityEvaluationSchema))
+        builder.add_node(understanding_node, _stage_node(persona_key, "understanding", UnderstandingEvaluationSchema))
+
+        builder.add_edge("initialize_audit", trust_node)
+        builder.add_edge(trust_node, usability_node)
+        builder.add_edge(usability_node, understanding_node)
+        terminal_nodes.append(understanding_node)
+
+    builder.add_node("synthesize_report", _synthesize_report)
     builder.add_edge(START, "initialize_audit")
-    builder.add_edge("initialize_audit", "data_scientist_review")
-    builder.add_edge("initialize_audit", "business_executive_review")
-    builder.add_edge("initialize_audit", "end_user_review")
-    builder.add_edge(
-        [
-            "data_scientist_review",
-            "business_executive_review",
-            "end_user_review",
-        ],
-        "synthesize_report",
-    )
+    builder.add_edge(terminal_nodes, "synthesize_report")
     builder.add_edge("synthesize_report", END)
     return builder.compile()
 
@@ -141,7 +176,7 @@ class AuditCoordinator:
             "reference_row": reference_row,
             "focus_label": focus_label,
             "sample_count": sample_count or self._sample_count,
-            "persona_reviews": [],
+            "interaction_records": [],
         }
         return self._graph.invoke(initial_state, context=context)
 
@@ -158,52 +193,53 @@ def _initialize_audit(state: AuditState, runtime: Runtime[AuditRuntimeContext]) 
     return {"sampled_cases": [record.to_dict() for record in records]}
 
 
-def _persona_node(persona_key: str):
+def _stage_node(persona_key: str, dimension: str, schema: type[Any]):
     persona_name = persona_key.replace("_", " ")
 
-    def run_persona(state: AuditState, runtime: Runtime[AuditRuntimeContext]) -> dict[str, Any]:
-        llm = runtime.context.llm.with_structured_output(PersonaQuestionnaireSchema)
+    def run_stage(state: AuditState, runtime: Runtime[AuditRuntimeContext]) -> dict[str, Any]:
+        llm = runtime.context.llm.with_structured_output(schema)
         prompt = ChatPromptTemplate.from_messages(
             [
                 ("system", PERSONA_PROMPTS[persona_key]),
                 (
                     "human",
                     """
-Audit the explanation method using the following sampled validation cases.
+You are interacting with the audit coordinator in one stage of a multi-step evaluation.
 
-User query:
-{user_query}
-
-Sampled cases with black-box outputs and explanation outputs:
-{sampled_cases}
-
-Instructions:
-- Give a trust score from 1 to 5.
-- Give a usability score from 1 to 5.
-- Answer every perturbation question.
-- For `predicted_score_direction`, only use: increase, decrease, no_change.
-- Keep your strengths and concerns tied to evidence in the sampled cases.
+Coordinator request:
+{coordinator_prompt}
                     """.strip(),
                 ),
             ]
         )
-        chain = prompt | llm
         visible_cases = user_visible_records(_dicts_to_sample_records(state["sampled_cases"]))
-        review = chain.invoke(
-            {
-                "user_query": state["user_query"],
-                "sampled_cases": json.dumps(visible_cases, indent=2, sort_keys=True),
-            }
+        coordinator_prompt = _build_coordinator_prompt(
+            dimension=dimension,
+            user_query=state["user_query"],
+            sampled_cases=visible_cases,
         )
-        normalized = _normalize_result(review)
+        chain = prompt | llm
+        response = chain.invoke({"coordinator_prompt": coordinator_prompt})
+        normalized = _normalize_result(response)
         normalized["persona"] = normalized.get("persona") or persona_name
-        graded_review = _grade_persona_review(normalized, state["sampled_cases"])
-        return {"persona_reviews": [graded_review]}
+        interaction_record = {
+            "persona": normalized["persona"],
+            "dimension": dimension,
+            "coordinator_prompt": coordinator_prompt,
+            "persona_response": normalized,
+        }
+        return {"interaction_records": [interaction_record]}
 
-    return run_persona
+    return run_stage
 
 
 def _synthesize_report(state: AuditState, runtime: Runtime[AuditRuntimeContext]) -> dict[str, Any]:
+    persona_reviews = compose_persona_reviews(
+        state.get("interaction_records", []),
+        state.get("sampled_cases", []),
+    )
+    aggregate = aggregate_scores(persona_reviews)
+
     llm = runtime.context.llm.with_structured_output(FinalReportSchema)
     prompt = ChatPromptTemplate.from_messages(
         [
@@ -211,8 +247,8 @@ def _synthesize_report(state: AuditState, runtime: Runtime[AuditRuntimeContext])
                 "system",
                 """
 You are the audit coordinator synthesizing a final report about a tabular explanation method.
-You are given validation-set evidence, black-box model outputs, explanation outputs, and persona questionnaire results.
-Use these to produce a concise decision-oriented synthesis.
+The persona evaluations were performed iteratively in separate trust, usability, and understanding interactions over the same sampled validation cases.
+Use this staged evidence to produce a concise decision-oriented synthesis.
                 """.strip(),
             ),
             (
@@ -234,111 +270,39 @@ Return a verdict, an executive summary, and actionable recommendations.
             ),
         ]
     )
-    aggregate_scores = _aggregate_scores(state.get("persona_reviews", []))
     chain = prompt | llm
     report = chain.invoke(
         {
             "user_query": state["user_query"],
-            "aggregate_scores": json.dumps(aggregate_scores, indent=2, sort_keys=True),
-            "persona_reviews": json.dumps(state.get("persona_reviews", []), indent=2, sort_keys=True),
+            "aggregate_scores": json.dumps(aggregate, indent=2, sort_keys=True),
+            "persona_reviews": json.dumps([review.to_dict() for review in persona_reviews], indent=2, sort_keys=True),
         }
     )
     normalized = _normalize_result(report)
     final_report = AuditReport(
         verdict=normalized["verdict"],
         executive_summary=normalized["executive_summary"],
-        aggregate_scores=aggregate_scores,
+        aggregate_scores=aggregate,
         sampled_cases=_dicts_to_sample_records(state.get("sampled_cases", [])),
-        persona_summaries=[_dict_to_persona_review(review) for review in state.get("persona_reviews", [])],
+        persona_summaries=persona_reviews,
         recommendations=normalized.get("recommendations", []),
     )
     return {"final_report": final_report.to_dict()}
 
 
-def _grade_persona_review(review: dict[str, Any], sampled_cases: list[dict[str, Any]]) -> dict[str, Any]:
-    answer_key = {
-        question["question_id"]: question
-        for record in sampled_cases
-        for question in record.get("perturbation_questions", [])
-    }
-    graded_answers: list[dict[str, Any]] = []
-    points_earned = 0
-    points_possible = 0
-
-    for answer in review.get("question_answers", []):
-        expected = answer_key.get(answer["question_id"])
-        if expected is None:
-            continue
-        is_label_correct = str(answer["predicted_label"]).strip().lower() == expected["expected_label"].strip().lower()
-        is_direction_correct = answer["predicted_score_direction"] == expected["expected_score_direction"]
-        graded_answers.append(
-            PersonaQuestionAnswer(
-                question_id=answer["question_id"],
-                predicted_label=answer["predicted_label"],
-                predicted_score_direction=answer["predicted_score_direction"],
-                reasoning=answer.get("reasoning", ""),
-                is_label_correct=is_label_correct,
-                is_direction_correct=is_direction_correct,
-            ).to_dict()
-        )
-        points_earned += int(is_label_correct) + int(is_direction_correct)
-        points_possible += 2
-
-    accuracy = (points_earned / points_possible) if points_possible else 0.0
-    understanding_score = _accuracy_to_five_point_scale(accuracy)
-
-    review["trust_score"] = _clamp_five_point_score(review.get("trust_score", 1))
-    review["usability_score"] = _clamp_five_point_score(review.get("usability_score", 1))
-    review["understanding_score"] = understanding_score
-    review["understanding_summary"] = (
-        f"{review.get('understanding_observations', '').strip()} "
-        f"Quiz accuracy was {accuracy:.0%} across {points_possible // 2} perturbation questions."
-    ).strip()
-    review["question_answers"] = graded_answers
-    review["scoring_breakdown"] = {
-        "questions_graded": points_possible // 2,
-        "points_earned": points_earned,
-        "points_possible": points_possible,
-        "accuracy": round(accuracy, 4),
-    }
-    review.pop("understanding_observations", None)
-    return review
-
-
-def _aggregate_scores(persona_reviews: list[dict[str, Any]]) -> dict[str, float]:
-    if not persona_reviews:
-        return {
-            "trust_score_avg": 0.0,
-            "usability_score_avg": 0.0,
-            "understanding_score_avg": 0.0,
-        }
-
-    count = len(persona_reviews)
-    return {
-        "trust_score_avg": round(sum(review["trust_score"] for review in persona_reviews) / count, 2),
-        "usability_score_avg": round(sum(review["usability_score"] for review in persona_reviews) / count, 2),
-        "understanding_score_avg": round(sum(review["understanding_score"] for review in persona_reviews) / count, 2),
-    }
-
-
-def _accuracy_to_five_point_scale(accuracy: float) -> int:
-    if accuracy <= 0.2:
-        return 1
-    if accuracy <= 0.4:
-        return 2
-    if accuracy <= 0.6:
-        return 3
-    if accuracy <= 0.8:
-        return 4
-    return 5
-
-
-def _clamp_five_point_score(value: Any) -> int:
-    try:
-        numeric = int(value)
-    except (TypeError, ValueError):
-        return 1
-    return max(1, min(5, numeric))
+def _build_coordinator_prompt(
+    *,
+    dimension: str,
+    user_query: str,
+    sampled_cases: list[dict[str, object]],
+) -> str:
+    return (
+        f"User query:\n{user_query}\n\n"
+        f"Evaluation dimension:\n{dimension}\n\n"
+        f"Stage instructions:\n{DIMENSION_INSTRUCTIONS[dimension]}\n\n"
+        "Use the exact same sampled validation cases used in the other stages of this audit.\n\n"
+        f"Sampled cases with black-box outputs and explanation outputs:\n{json.dumps(sampled_cases, indent=2, sort_keys=True)}"
+    )
 
 
 def _normalize_result(result: Any) -> dict[str, Any]:
@@ -352,7 +316,7 @@ def _normalize_result(result: Any) -> dict[str, Any]:
 
 
 def _dicts_to_sample_records(payload: list[dict[str, Any]]):
-    from .types import LocalExplanation, PerturbationQuestion, SampleAuditRecord
+    from .types import LocalExplanation, PerturbationQuestion, PredictionResult, SampleAuditRecord
 
     records: list[SampleAuditRecord] = []
     for item in payload:
@@ -377,19 +341,3 @@ def _dicts_to_sample_records(payload: list[dict[str, Any]]):
             )
         )
     return records
-
-
-def _dict_to_persona_review(payload: dict[str, Any]) -> PersonaReview:
-    return PersonaReview(
-        persona=payload["persona"],
-        trust_score=payload["trust_score"],
-        trust_rationale=payload["trust_rationale"],
-        usability_score=payload["usability_score"],
-        usability_rationale=payload["usability_rationale"],
-        understanding_score=payload["understanding_score"],
-        understanding_summary=payload["understanding_summary"],
-        strengths=payload.get("strengths", []),
-        concerns=payload.get("concerns", []),
-        question_answers=[PersonaQuestionAnswer(**answer) for answer in payload.get("question_answers", [])],
-        scoring_breakdown=payload.get("scoring_breakdown", {}),
-    )
