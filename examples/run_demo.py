@@ -4,17 +4,17 @@ import json
 import os
 import sys
 
-from langchain.chat_models import init_chat_model
+from langchain_ollama import OllamaLLM
 
 from xai_audit.graph import AuditCoordinator
 from xai_audit.simple_xai import FiniteDifferenceTabularExplainer, ToyCreditRiskModel
 
 
 def main() -> int:
-    model_spec = os.environ.get("AUDIT_LLM_MODEL", "openai:gpt-4.1-mini")
+    model_spec = os.environ.get("AUDIT_LLM_MODEL", "gemma3")
 
     try:
-        llm = init_chat_model(model_spec)
+        llm = OllamaLLM(model="gemma3:latest")
     except Exception as exc:  # pragma: no cover - demo bootstrap path
         print(
             "Failed to initialize the LangChain chat model.\n"
