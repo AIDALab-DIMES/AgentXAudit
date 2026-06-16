@@ -56,18 +56,18 @@ class UsabilityEvaluationSchema:
 
 
 @dataclass
-class PersonaQuestionAnswerSchema:
+class UnderstandingObservationSchema:
+    persona: str
+    understanding_observations: str
+
+
+@dataclass
+class UnderstandingQuestionAnswerSchema:
+    persona: str
     question_id: str
     predicted_label: str
     predicted_score_direction: Literal["increase", "decrease", "no_change"]
     reasoning: str
-
-
-@dataclass
-class UnderstandingEvaluationSchema:
-    persona: str
-    understanding_observations: str
-    question_answers: list[PersonaQuestionAnswerSchema]
 
 
 @dataclass
@@ -111,9 +111,9 @@ Return evidence-based strengths and concerns related only to usability.
     "understanding": """
 This interaction evaluates model understanding only.
 Do not score trust or usability here.
-Answer every perturbation question by predicting the black-box model's likely label and whether the focal score would increase, decrease, or stay about the same.
+Answer the given perturbation question by predicting the black-box model's likely label and whether the focal score would increase, decrease, or stay about the same.
 Use only these values for predicted_score_direction: increase, decrease, no_change.
-Also provide a short observation about how understandable the model behavior felt from the sampled evidence.
+Keep the reasoning very short.
 """.strip(),
 }
 
@@ -132,7 +132,7 @@ def build_audit_graph() -> Any:
 
         builder.add_node(trust_node, _stage_node(persona_key, "trust", TrustEvaluationSchema))
         builder.add_node(usability_node, _stage_node(persona_key, "usability", UsabilityEvaluationSchema))
-        builder.add_node(understanding_node, _stage_node(persona_key, "understanding", UnderstandingEvaluationSchema))
+        builder.add_node(understanding_node, _stage_node(persona_key, "understanding", None))
 
         builder.add_edge("initialize_audit", trust_node)
         builder.add_edge(trust_node, usability_node)
@@ -193,10 +193,13 @@ def _initialize_audit(state: AuditState, runtime: Runtime[AuditRuntimeContext]) 
     return {"sampled_cases": [record.to_dict() for record in records]}
 
 
-def _stage_node(persona_key: str, dimension: str, schema: type[Any]):
+def _stage_node(persona_key: str, dimension: str, schema: type[Any] | None):
     persona_name = persona_key.replace("_", " ")
 
     def run_stage(state: AuditState, runtime: Runtime[AuditRuntimeContext]) -> dict[str, Any]:
+        if dimension == "understanding":
+            return _run_understanding_stage(persona_name, state, runtime)
+
         llm = runtime.context.llm.with_structured_output(schema)
         prompt = ChatPromptTemplate.from_messages(
             [
@@ -234,6 +237,96 @@ Coordinator request:
         return {"interaction_records": [interaction_record]}
 
     return run_stage
+
+
+def _run_understanding_stage(
+    persona_name: str,
+    state: AuditState,
+    runtime: Runtime[AuditRuntimeContext],
+) -> dict[str, Any]:
+    records = _dicts_to_sample_records(state["sampled_cases"])
+    interaction_records: list[dict[str, Any]] = []
+
+    observation_llm = runtime.context.llm.with_structured_output(UnderstandingObservationSchema)
+    observation_prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", PERSONA_PROMPTS[_persona_key_from_name(persona_name)]),
+            (
+                "human",
+                """
+You are interacting with the audit coordinator in one stage of a multi-step evaluation.
+
+Coordinator request:
+{coordinator_prompt}
+                """.strip(),
+            ),
+        ]
+    )
+    overview_packet = build_persona_stage_packet(records, dimension="trust")
+    observation_request = (
+        f"User query:\n{state['user_query']}\n\n"
+        "Evaluation dimension:\nunderstanding\n\n"
+        "Stage instructions:\nProvide one short observation, at most two sentences, about how understandable the model behavior feels from these sampled cases. "
+        "Do not answer perturbation questions in this interaction.\n\n"
+        f"Sampled cases with black-box outputs and explanation outputs:\n{overview_packet}"
+    )
+    observation_response = observation_prompt | observation_llm
+    observation_result = _normalize_result(
+        observation_response.invoke({"coordinator_prompt": observation_request})
+    )
+    observation_result["persona"] = observation_result.get("persona") or persona_name
+    interaction_records.append(
+        {
+            "persona": observation_result["persona"],
+            "dimension": "understanding",
+            "coordinator_prompt": observation_request,
+            "persona_response": observation_result,
+        }
+    )
+
+    answer_llm = runtime.context.llm.with_structured_output(UnderstandingQuestionAnswerSchema)
+    answer_prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", PERSONA_PROMPTS[_persona_key_from_name(persona_name)]),
+            (
+                "human",
+                """
+You are interacting with the audit coordinator in one stage of a multi-step evaluation.
+
+Coordinator request:
+{coordinator_prompt}
+                """.strip(),
+            ),
+        ]
+    )
+    answer_chain = answer_prompt | answer_llm
+
+    for record in records:
+        if not record.perturbation_questions:
+            continue
+        question_packet = build_persona_stage_packet([record], dimension="understanding")
+        question_request = (
+            f"User query:\n{state['user_query']}\n\n"
+            "Evaluation dimension:\nunderstanding\n\n"
+            f"Stage instructions:\n{DIMENSION_INSTRUCTIONS['understanding']}\n"
+            "Answer only the single perturbation question shown below. "
+            "Keep the reasoning to one short sentence.\n\n"
+            f"Sampled case with black-box outputs and explanation outputs:\n{question_packet}"
+        )
+        answer_result = _normalize_result(
+            answer_chain.invoke({"coordinator_prompt": question_request})
+        )
+        answer_result["persona"] = answer_result.get("persona") or persona_name
+        interaction_records.append(
+            {
+                "persona": answer_result["persona"],
+                "dimension": "understanding",
+                "coordinator_prompt": question_request,
+                "persona_response": answer_result,
+            }
+        )
+
+    return {"interaction_records": interaction_records}
 
 
 def _synthesize_report(state: AuditState, runtime: Runtime[AuditRuntimeContext]) -> dict[str, Any]:
@@ -317,6 +410,10 @@ def _normalize_result(result: Any) -> dict[str, Any]:
     if isinstance(result, dict):
         return result
     raise TypeError(f"Unsupported structured output type: {type(result)!r}")
+
+
+def _persona_key_from_name(persona_name: str) -> str:
+    return persona_name.replace(" ", "_")
 
 
 def _persona_review_summary(review: PersonaReview) -> dict[str, Any]:

@@ -10,13 +10,13 @@ def compose_persona_reviews(
     interaction_records: list[dict[str, Any]],
     sampled_cases: list[dict[str, Any]],
 ) -> list[PersonaReview]:
-    grouped: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
+    grouped: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
     ordered_interactions: dict[str, list[PersonaEvaluationInteraction]] = defaultdict(list)
 
     for record in interaction_records:
         persona = record["persona"]
         dimension = record["dimension"]
-        grouped[persona][dimension] = record["persona_response"]
+        grouped[persona][dimension].append(record["persona_response"])
         ordered_interactions[persona].append(
             PersonaEvaluationInteraction(
                 persona=persona,
@@ -28,9 +28,9 @@ def compose_persona_reviews(
 
     reviews: list[PersonaReview] = []
     for persona in sorted(grouped):
-        trust_data = grouped[persona].get("trust", {})
-        usability_data = grouped[persona].get("usability", {})
-        understanding_data = grouped[persona].get("understanding", {})
+        trust_data = grouped[persona].get("trust", [{}])[0]
+        usability_data = grouped[persona].get("usability", [{}])[0]
+        understanding_data = _merge_understanding_records(grouped[persona].get("understanding", []))
         graded_understanding = _grade_understanding(understanding_data, sampled_cases)
 
         strengths = _merge_unique_lists(
@@ -63,6 +63,29 @@ def compose_persona_reviews(
         )
 
     return reviews
+
+
+def _merge_understanding_records(records: list[dict[str, Any]]) -> dict[str, Any]:
+    merged = {
+        "understanding_observations": "",
+        "question_answers": [],
+    }
+    for record in records:
+        observation = record.get("understanding_observations", "").strip()
+        if observation and not merged["understanding_observations"]:
+            merged["understanding_observations"] = observation
+        if "question_id" in record:
+            merged["question_answers"].append(
+                {
+                    "question_id": record["question_id"],
+                    "predicted_label": record["predicted_label"],
+                    "predicted_score_direction": record["predicted_score_direction"],
+                    "reasoning": record.get("reasoning", ""),
+                }
+            )
+        elif "question_answers" in record:
+            merged["question_answers"].extend(record["question_answers"])
+    return merged
 
 
 def aggregate_scores(persona_reviews: list[PersonaReview]) -> dict[str, float]:
