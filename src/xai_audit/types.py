@@ -64,7 +64,7 @@ class PersonaQuestionAnswer:
     question_id: str
     predicted_label: str
     predicted_score_direction: Literal["increase", "decrease", "no_change"]
-    reasoning: str
+    reasoning: str = ""
     is_label_correct: bool = False
     is_direction_correct: bool = False
 

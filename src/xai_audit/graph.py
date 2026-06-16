@@ -67,7 +67,6 @@ class UnderstandingQuestionAnswerSchema:
     question_id: str
     predicted_label: str
     predicted_score_direction: Literal["increase", "decrease", "no_change"]
-    reasoning: str
 
 
 @dataclass
@@ -113,7 +112,6 @@ This interaction evaluates model understanding only.
 Do not score trust or usability here.
 Answer the given perturbation question by predicting the black-box model's likely label and whether the focal score would increase, decrease, or stay about the same.
 Use only these values for predicted_score_direction: increase, decrease, no_change.
-Keep the reasoning very short.
 """.strip(),
 }
 
@@ -200,7 +198,7 @@ def _stage_node(persona_key: str, dimension: str, schema: type[Any] | None):
         if dimension == "understanding":
             return _run_understanding_stage(persona_name, state, runtime)
 
-        llm = runtime.context.llm.with_structured_output(schema)
+        llm = _bounded_structured_llm(runtime.context.llm, schema, max_tokens=220)
         prompt = ChatPromptTemplate.from_messages(
             [
                 ("system", PERSONA_PROMPTS[persona_key]),
@@ -247,7 +245,11 @@ def _run_understanding_stage(
     records = _dicts_to_sample_records(state["sampled_cases"])
     interaction_records: list[dict[str, Any]] = []
 
-    observation_llm = runtime.context.llm.with_structured_output(UnderstandingObservationSchema)
+    observation_llm = _bounded_structured_llm(
+        runtime.context.llm,
+        UnderstandingObservationSchema,
+        max_tokens=80,
+    )
     observation_prompt = ChatPromptTemplate.from_messages(
         [
             ("system", PERSONA_PROMPTS[_persona_key_from_name(persona_name)]),
@@ -266,7 +268,7 @@ Coordinator request:
     observation_request = (
         f"User query:\n{state['user_query']}\n\n"
         "Evaluation dimension:\nunderstanding\n\n"
-        "Stage instructions:\nProvide one short observation, at most two sentences, about how understandable the model behavior feels from these sampled cases. "
+        "Stage instructions:\nProvide one short observation, at most twelve words, about how understandable the model behavior feels from these sampled cases. "
         "Do not answer perturbation questions in this interaction.\n\n"
         f"Sampled cases with black-box outputs and explanation outputs:\n{overview_packet}"
     )
@@ -284,7 +286,11 @@ Coordinator request:
         }
     )
 
-    answer_llm = runtime.context.llm.with_structured_output(UnderstandingQuestionAnswerSchema)
+    answer_llm = _bounded_structured_llm(
+        runtime.context.llm,
+        UnderstandingQuestionAnswerSchema,
+        max_tokens=60,
+    )
     answer_prompt = ChatPromptTemplate.from_messages(
         [
             ("system", PERSONA_PROMPTS[_persona_key_from_name(persona_name)]),
@@ -309,8 +315,7 @@ Coordinator request:
             f"User query:\n{state['user_query']}\n\n"
             "Evaluation dimension:\nunderstanding\n\n"
             f"Stage instructions:\n{DIMENSION_INSTRUCTIONS['understanding']}\n"
-            "Answer only the single perturbation question shown below. "
-            "Keep the reasoning to one short sentence.\n\n"
+            "Answer only the single perturbation question shown below.\n\n"
             f"Sampled case with black-box outputs and explanation outputs:\n{question_packet}"
         )
         answer_result = _normalize_result(
@@ -337,7 +342,7 @@ def _synthesize_report(state: AuditState, runtime: Runtime[AuditRuntimeContext])
     aggregate = aggregate_scores(persona_reviews)
     persona_review_summaries = [_persona_review_summary(review) for review in persona_reviews]
 
-    llm = runtime.context.llm.with_structured_output(FinalReportSchema)
+    llm = _bounded_structured_llm(runtime.context.llm, FinalReportSchema, max_tokens=220)
     prompt = ChatPromptTemplate.from_messages(
         [
             (
@@ -410,6 +415,17 @@ def _normalize_result(result: Any) -> dict[str, Any]:
     if isinstance(result, dict):
         return result
     raise TypeError(f"Unsupported structured output type: {type(result)!r}")
+
+
+def _bounded_structured_llm(llm: BaseChatModel, schema: type[Any], max_tokens: int):
+    bound = llm
+    for key in ("max_completion_tokens", "max_tokens"):
+        try:
+            bound = bound.bind(**{key: max_tokens})
+            break
+        except Exception:
+            continue
+    return bound.with_structured_output(schema)
 
 
 def _persona_key_from_name(persona_name: str) -> str:

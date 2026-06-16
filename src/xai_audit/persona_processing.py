@@ -80,7 +80,6 @@ def _merge_understanding_records(records: list[dict[str, Any]]) -> dict[str, Any
                     "question_id": record["question_id"],
                     "predicted_label": record["predicted_label"],
                     "predicted_score_direction": record["predicted_score_direction"],
-                    "reasoning": record.get("reasoning", ""),
                 }
             )
         elif "question_answers" in record:
