@@ -181,6 +181,11 @@ def train_benchmark_dataset(
         "dataset_name": dataset_name,
         "model_family": "pytorch_tabular_mlp",
         "model_config": asdict(config),
+        "random_state": random_state,
+        "feature_names": list(dataset.features.columns),
+        "categorical_features": list(dataset.categorical_features),
+        "numeric_features": list(dataset.numeric_features),
+        "class_names": ["negative", dataset.spec.positive_class],
         "training_history": history,
         "artifact_files": {
             "model": str(model_path.resolve()),
@@ -194,10 +199,12 @@ def train_benchmark_dataset(
     metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8")
 
     dataset_export = dataset.features.copy()
+    dataset_export.insert(0, "source_row_id", dataset.features.index.astype(str))
     dataset_export["target"] = dataset.target.values
     dataset_export.to_csv(dataset_csv_path, index=False)
 
     test_export = X_test_df.copy()
+    test_export.insert(0, "source_row_id", X_test_df.index.astype(str))
     test_export["target"] = y_test_series.values
     test_export["predicted_probability"] = y_proba
     test_export["predicted_label"] = y_pred

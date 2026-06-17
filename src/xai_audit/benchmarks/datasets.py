@@ -122,7 +122,12 @@ def _load_uci_dataset(spec: DatasetSpec) -> LoadedTabularDataset:
         target = pd.to_numeric(target, errors="raise").astype("int64")
 
     features = _clean_feature_frame(features)
-    categorical_features = [column for column in spec.categorical_features if column in features.columns]
+    inferred_categorical = [
+        column
+        for column in features.columns
+        if str(features[column].dtype) in {"object", "string", "category"}
+    ]
+    categorical_features = sorted(set(column for column in spec.categorical_features if column in features.columns) | set(inferred_categorical))
     numeric_features = [column for column in features.columns if column not in categorical_features]
 
     metadata = {

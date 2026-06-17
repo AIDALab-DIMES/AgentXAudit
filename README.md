@@ -37,8 +37,12 @@ The orchestration layer uses `LangGraph`, while LLM interactions use `LangChain`
 - `src/xai_audit/simple_xai.py`: demo black-box model, fixed explainer, and demo validation set
 - `src/xai_audit/technical.py`: optional technical metrics retained from the earlier prototype
 - `src/xai_audit/benchmarks/datasets.py`: finance and healthcare benchmark dataset loaders
+- `src/xai_audit/benchmarks/inference.py`: loader for trained PyTorch artifacts
 - `src/xai_audit/benchmarks/training.py`: neural baseline training and artifact export
+- `src/xai_audit/artifact_adapters.py`: black-box wrapper for trained artifacts
+- `src/xai_audit/explainers/`: extendable audit-ready explainer adapters
 - `scripts/train_benchmark_models.py`: CLI for fetching datasets, training models, and saving results
+- `scripts/audit_trained_model_explainers.py`: CLI for launching the audit framework on dynamic SHAP/LIME explanations
 - `examples/run_demo.py`: runnable demonstration
 
 ## Core Assumptions
@@ -121,6 +125,41 @@ Artifacts are saved under `artifacts/benchmark_models/<dataset_name>/` and inclu
 - `dataset.csv`
 - `test_split.csv`
 - `training_summary.json`
+
+## Audit Trained Artifacts With Dynamic SHAP/LIME Explanations
+
+After training, run:
+
+```bash
+PYTHONPATH=src python3 scripts/audit_trained_model_explainers.py --dataset german_credit --methods shap lime
+```
+
+This script:
+
+1. loads a saved PyTorch black-box model artifact
+2. loads its preprocessing pipeline
+3. uses the saved holdout split as the validation set
+4. lets the audit coordinator autonomously select representative validation samples
+5. dynamically generates explanations for those samples with SHAP or LIME
+6. launches the same iterative audit workflow used in `examples/run_demo.py`
+7. writes one audit CSV per explanation method
+
+Outputs are saved under `artifacts/audit_outputs/<dataset_name>/`:
+
+- `audit_shap.csv`
+- `audit_lime.csv`
+- `audit_manifest.json`
+
+## Extendability Principle
+
+The dynamic explanation layer is designed to be extended with new methods:
+
+- `BaseAuditExplainer` defines the explainer interface expected by the audit coordinator
+- `register_explainer(...)` adds a new explanation method to the registry
+- `build_explainer(...)` instantiates the chosen method by name
+- each explainer returns the common `LocalExplanation` structure already consumed by the audit framework
+
+So to add another method, you only need to implement a new adapter class under `src/xai_audit/explainers/` and register it.
 
 ## Dataset Sources
 
