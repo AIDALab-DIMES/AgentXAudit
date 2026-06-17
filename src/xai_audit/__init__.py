@@ -24,14 +24,36 @@ except ImportError:  # Optional until LangChain/LangGraph dependencies are insta
     AuditRuntimeContext = None
     build_audit_graph = None
 
+try:
+    from .benchmarks import (
+        DATASET_SPECS,
+        DatasetSpec,
+        LoadedTabularDataset,
+        available_dataset_names,
+        load_dataset,
+        train_benchmark_dataset,
+        train_many_benchmark_datasets,
+    )
+except ImportError:  # Optional until tabular benchmark dependencies are installed.
+    DATASET_SPECS = None
+    DatasetSpec = None
+    LoadedTabularDataset = None
+    available_dataset_names = None
+    load_dataset = None
+    train_benchmark_dataset = None
+    train_many_benchmark_datasets = None
+
 __all__ = [
     "AuditCoordinator",
     "AuditRuntimeContext",
     "AuditCsvArtifact",
     "AuditCsvRow",
+    "DATASET_SPECS",
+    "DatasetSpec",
     "FixedTabularExplainer",
     "FiniteDifferenceTabularExplainer",
     "LocalExplanation",
+    "LoadedTabularDataset",
     "PersonaEvaluationInteraction",
     "PersonaQuestionAnswer",
     "PersonaReview",
@@ -45,9 +67,13 @@ __all__ = [
     "ToyCreditRiskModel",
     "ValidationSamplingConfig",
     "aggregate_scores",
+    "available_dataset_names",
     "build_csv_artifact",
     "build_demo_validation_set",
     "build_audit_graph",
     "build_sample_audit_records",
     "compose_persona_reviews",
+    "load_dataset",
+    "train_benchmark_dataset",
+    "train_many_benchmark_datasets",
 ]

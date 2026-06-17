@@ -36,6 +36,9 @@ The orchestration layer uses `LangGraph`, while LLM interactions use `LangChain`
 - `src/xai_audit/graph.py`: LangGraph coordinator and staged persona workflow
 - `src/xai_audit/simple_xai.py`: demo black-box model, fixed explainer, and demo validation set
 - `src/xai_audit/technical.py`: optional technical metrics retained from the earlier prototype
+- `src/xai_audit/benchmarks/datasets.py`: finance and healthcare benchmark dataset loaders
+- `src/xai_audit/benchmarks/training.py`: neural baseline training and artifact export
+- `scripts/train_benchmark_models.py`: CLI for fetching datasets, training models, and saving results
 - `examples/run_demo.py`: runnable demonstration
 
 ## Core Assumptions
@@ -89,3 +92,38 @@ Then call `AuditCoordinator.audit(...)` with your validation set. If you want a 
 - The understanding score is derived automatically from persona quiz accuracy, then mapped to a 1 to 5 scale.
 - No LLM-based final report is generated; the final artifact is a deterministic CSV.
 - The prototype is intentionally compact so you can swap in stronger explainers, richer questionnaires, or more sophisticated sample selection later.
+
+## Benchmark Datasets
+
+The repository now includes four tabular classification benchmarks for assessing the framework in finance and healthcare:
+
+- `german_credit` (`finance`): UCI Statlog German Credit Data
+- `credit_card_default` (`finance`): UCI Default of Credit Card Clients
+- `heart_disease` (`healthcare`): UCI Heart Disease
+- `breast_cancer` (`healthcare`): scikit-learn Wisconsin Diagnostic Breast Cancer
+
+Each benchmark is paired with a tuned `MLPClassifier` baseline saved as a full preprocessing-plus-model pipeline.
+
+## Train Benchmark Models
+
+After installing dependencies, run:
+
+```bash
+PYTHONPATH=src python3 scripts/train_benchmark_models.py --datasets all
+```
+
+Artifacts are saved under `artifacts/benchmark_models/<dataset_name>/` and include:
+
+- `model.joblib`
+- `metrics.json`
+- `metadata.json`
+- `dataset.csv`
+- `test_split.csv`
+- `training_summary.json`
+
+## Dataset Sources
+
+- German Credit: [UCI Statlog (German Credit Data)](https://archive.ics.uci.edu/dataset/144/statlog+german+credit+data)
+- Credit Card Default: [UCI Default of Credit Card Clients](https://archive.ics.uci.edu/dataset/350/default+of+credit+card+clients)
+- Heart Disease: [UCI Heart Disease](https://archive.ics.uci.edu/dataset/45/heart+disease)
+- Breast Cancer: [scikit-learn load_breast_cancer](https://scikit-learn.org/stable/modules/generated/sklearn.datasets.load_breast_cancer.html)
