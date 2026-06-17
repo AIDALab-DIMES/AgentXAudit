@@ -1,39 +1,44 @@
 from __future__ import annotations
 
 import json
+import random
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 import joblib
+import numpy as np
 import pandas as pd
+import torch
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import accuracy_score, average_precision_score, f1_score, roc_auc_score
 from sklearn.model_selection import train_test_split
-from sklearn.neural_network import MLPClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from torch import nn
+from torch.utils.data import DataLoader, TensorDataset
 
-from .datasets import DATASET_SPECS, LoadedTabularDataset, available_dataset_names, load_dataset
+from .datasets import LoadedTabularDataset, available_dataset_names, load_dataset
 
 
 @dataclass(frozen=True)
 class NeuralModelConfig:
     hidden_layer_sizes: tuple[int, ...]
-    alpha: float = 1e-4
-    learning_rate_init: float = 1e-3
+    dropout: float = 0.1
+    learning_rate: float = 1e-3
+    weight_decay: float = 1e-4
     batch_size: int = 64
-    max_iter: int = 400
-    early_stopping: bool = True
-    n_iter_no_change: int = 20
+    epochs: int = 120
+    patience: int = 15
+    validation_fraction: float = 0.15
 
 
 MODEL_CONFIGS: dict[str, NeuralModelConfig] = {
-    "german_credit": NeuralModelConfig(hidden_layer_sizes=(64, 32), batch_size=32, max_iter=500),
-    "credit_card_default": NeuralModelConfig(hidden_layer_sizes=(128, 64, 32), batch_size=256, max_iter=300),
-    "heart_disease": NeuralModelConfig(hidden_layer_sizes=(32, 16), batch_size=32, max_iter=500),
-    "breast_cancer": NeuralModelConfig(hidden_layer_sizes=(64, 32), batch_size=32, max_iter=500),
+    "german_credit": NeuralModelConfig(hidden_layer_sizes=(64, 32), batch_size=32, epochs=160, patience=20),
+    "credit_card_default": NeuralModelConfig(hidden_layer_sizes=(128, 64, 32), batch_size=256, epochs=80, patience=12),
+    "heart_disease": NeuralModelConfig(hidden_layer_sizes=(32, 16), batch_size=32, epochs=180, patience=25),
+    "breast_cancer": NeuralModelConfig(hidden_layer_sizes=(64, 32), batch_size=32, epochs=160, patience=20),
 }
 
 
@@ -50,6 +55,27 @@ class TrainingResult:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+class TabularMLP(nn.Module):
+    def __init__(self, input_dim: int, hidden_layer_sizes: tuple[int, ...], dropout: float) -> None:
+        super().__init__()
+        layers: list[nn.Module] = []
+        prev_dim = input_dim
+        for hidden_dim in hidden_layer_sizes:
+            layers.extend(
+                [
+                    nn.Linear(prev_dim, hidden_dim),
+                    nn.ReLU(),
+                    nn.Dropout(dropout),
+                ]
+            )
+            prev_dim = hidden_dim
+        layers.append(nn.Linear(prev_dim, 1))
+        self.network = nn.Sequential(*layers)
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        return self.network(inputs).squeeze(-1)
 
 
 def train_many_benchmark_datasets(
@@ -79,20 +105,48 @@ def train_benchmark_dataset(
     if dataset_name not in MODEL_CONFIGS:
         raise KeyError(f"No neural model config registered for {dataset_name!r}.")
 
+    _set_random_seed(random_state)
     config = MODEL_CONFIGS[dataset_name]
-    X_train, X_test, y_train, y_test = train_test_split(
+    X_train_df, X_test_df, y_train_series, y_test_series = train_test_split(
         dataset.features,
         dataset.target,
         test_size=0.2,
         random_state=random_state,
         stratify=dataset.target,
     )
+    X_fit_df, X_val_df, y_fit_series, y_val_series = train_test_split(
+        X_train_df,
+        y_train_series,
+        test_size=config.validation_fraction,
+        random_state=random_state,
+        stratify=y_train_series,
+    )
 
-    pipeline = _build_pipeline(dataset, config, random_state=random_state)
-    pipeline.fit(X_train, y_train)
+    preprocessor = _build_preprocessor(dataset)
+    X_fit = _to_dense_float32(preprocessor.fit_transform(X_fit_df))
+    X_val = _to_dense_float32(preprocessor.transform(X_val_df))
+    X_test = _to_dense_float32(preprocessor.transform(X_test_df))
 
-    y_pred = pipeline.predict(X_test)
-    y_proba = pipeline.predict_proba(X_test)[:, 1]
+    y_fit = y_fit_series.to_numpy(dtype=np.float32)
+    y_val = y_val_series.to_numpy(dtype=np.float32)
+    y_test = y_test_series.to_numpy(dtype=np.float32)
+
+    model = TabularMLP(
+        input_dim=X_fit.shape[1],
+        hidden_layer_sizes=config.hidden_layer_sizes,
+        dropout=config.dropout,
+    )
+    history = _train_torch_model(
+        model=model,
+        X_fit=X_fit,
+        y_fit=y_fit,
+        X_val=X_val,
+        y_val=y_val,
+        config=config,
+    )
+
+    y_proba = _predict_probabilities(model, X_test)
+    y_pred = (y_proba >= 0.5).astype(np.int64)
     metrics = {
         "accuracy": round(float(accuracy_score(y_test, y_pred)), 6),
         "f1": round(float(f1_score(y_test, y_pred)), 6),
@@ -103,21 +157,34 @@ def train_benchmark_dataset(
     artifact_root = Path(output_dir) / dataset_name
     artifact_root.mkdir(parents=True, exist_ok=True)
 
-    model_path = artifact_root / "model.joblib"
+    model_path = artifact_root / "model.pt"
+    preprocessor_path = artifact_root / "preprocessor.joblib"
     metrics_path = artifact_root / "metrics.json"
     metadata_path = artifact_root / "metadata.json"
     dataset_csv_path = artifact_root / "dataset.csv"
     split_csv_path = artifact_root / "test_split.csv"
 
-    joblib.dump(pipeline, model_path)
+    torch.save(
+        {
+            "state_dict": model.state_dict(),
+            "input_dim": X_fit.shape[1],
+            "hidden_layer_sizes": config.hidden_layer_sizes,
+            "dropout": config.dropout,
+        },
+        model_path,
+    )
+    joblib.dump(preprocessor, preprocessor_path)
     metrics_path.write_text(json.dumps(metrics, indent=2, sort_keys=True), encoding="utf-8")
+
     metadata = {
         **dataset.metadata,
         "dataset_name": dataset_name,
-        "model_family": "sklearn_mlp_classifier",
+        "model_family": "pytorch_tabular_mlp",
         "model_config": asdict(config),
+        "training_history": history,
         "artifact_files": {
             "model": str(model_path.resolve()),
+            "preprocessor": str(preprocessor_path.resolve()),
             "metrics": str(metrics_path.resolve()),
             "metadata": str(metadata_path.resolve()),
             "dataset_csv": str(dataset_csv_path.resolve()),
@@ -130,8 +197,8 @@ def train_benchmark_dataset(
     dataset_export["target"] = dataset.target.values
     dataset_export.to_csv(dataset_csv_path, index=False)
 
-    test_export = X_test.copy()
-    test_export["target"] = y_test.values
+    test_export = X_test_df.copy()
+    test_export["target"] = y_test_series.values
     test_export["predicted_probability"] = y_proba
     test_export["predicted_label"] = y_pred
     test_export.to_csv(split_csv_path, index=False)
@@ -148,12 +215,7 @@ def train_benchmark_dataset(
     )
 
 
-def _build_pipeline(
-    dataset: LoadedTabularDataset,
-    config: NeuralModelConfig,
-    *,
-    random_state: int,
-) -> Pipeline:
+def _build_preprocessor(dataset: LoadedTabularDataset) -> ColumnTransformer:
     numeric_pipeline = Pipeline(
         [
             ("imputer", SimpleImputer(strategy="median")),
@@ -172,21 +234,100 @@ def _build_pipeline(
         transformers.append(("numeric", numeric_pipeline, dataset.numeric_features))
     if dataset.categorical_features:
         transformers.append(("categorical", categorical_pipeline, dataset.categorical_features))
+    return ColumnTransformer(transformers=transformers)
 
-    preprocessor = ColumnTransformer(transformers=transformers)
-    model = MLPClassifier(
-        hidden_layer_sizes=config.hidden_layer_sizes,
-        alpha=config.alpha,
-        learning_rate_init=config.learning_rate_init,
+
+def _train_torch_model(
+    *,
+    model: TabularMLP,
+    X_fit: np.ndarray,
+    y_fit: np.ndarray,
+    X_val: np.ndarray,
+    y_val: np.ndarray,
+    config: NeuralModelConfig,
+) -> dict[str, float | int]:
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
+
+    train_loader = DataLoader(
+        TensorDataset(
+            torch.from_numpy(X_fit),
+            torch.from_numpy(y_fit),
+        ),
         batch_size=config.batch_size,
-        max_iter=config.max_iter,
-        early_stopping=config.early_stopping,
-        n_iter_no_change=config.n_iter_no_change,
-        random_state=random_state,
+        shuffle=True,
     )
-    return Pipeline(
-        [
-            ("preprocessor", preprocessor),
-            ("model", model),
-        ]
+    X_val_tensor = torch.from_numpy(X_val).to(device)
+    y_val_tensor = torch.from_numpy(y_val).to(device)
+
+    optimizer = torch.optim.Adam(
+        model.parameters(),
+        lr=config.learning_rate,
+        weight_decay=config.weight_decay,
     )
+    criterion = nn.BCEWithLogitsLoss()
+
+    best_state = None
+    best_val_loss = float("inf")
+    best_epoch = 0
+    epochs_without_improvement = 0
+
+    for epoch in range(1, config.epochs + 1):
+        model.train()
+        for batch_inputs, batch_targets in train_loader:
+            batch_inputs = batch_inputs.to(device)
+            batch_targets = batch_targets.to(device)
+
+            optimizer.zero_grad()
+            logits = model(batch_inputs)
+            loss = criterion(logits, batch_targets)
+            loss.backward()
+            optimizer.step()
+
+        model.eval()
+        with torch.no_grad():
+            val_logits = model(X_val_tensor)
+            val_loss = float(criterion(val_logits, y_val_tensor).item())
+
+        if val_loss < best_val_loss - 1e-5:
+            best_val_loss = val_loss
+            best_epoch = epoch
+            best_state = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
+
+        if epochs_without_improvement >= config.patience:
+            break
+
+    if best_state is not None:
+        model.load_state_dict(best_state)
+    model.to(torch.device("cpu"))
+
+    return {
+        "best_validation_loss": round(best_val_loss, 6),
+        "best_epoch": int(best_epoch),
+        "epochs_completed": int(epoch),
+    }
+
+
+def _predict_probabilities(model: TabularMLP, inputs: np.ndarray) -> np.ndarray:
+    model.eval()
+    with torch.no_grad():
+        logits = model(torch.from_numpy(inputs))
+        probabilities = torch.sigmoid(logits).cpu().numpy()
+    return probabilities.astype(np.float64)
+
+
+def _to_dense_float32(matrix: Any) -> np.ndarray:
+    if hasattr(matrix, "toarray"):
+        matrix = matrix.toarray()
+    return np.asarray(matrix, dtype=np.float32)
+
+
+def _set_random_seed(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)

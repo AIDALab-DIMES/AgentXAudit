@@ -102,7 +102,7 @@ The repository now includes four tabular classification benchmarks for assessing
 - `heart_disease` (`healthcare`): UCI Heart Disease
 - `breast_cancer` (`healthcare`): scikit-learn Wisconsin Diagnostic Breast Cancer
 
-Each benchmark is paired with a tuned `MLPClassifier` baseline saved as a full preprocessing-plus-model pipeline.
+Each benchmark is paired with a PyTorch MLP baseline for tabular binary classification. The preprocessing pipeline is saved separately from the neural network checkpoint.
 
 ## Train Benchmark Models
 
@@ -114,7 +114,8 @@ PYTHONPATH=src python3 scripts/train_benchmark_models.py --datasets all
 
 Artifacts are saved under `artifacts/benchmark_models/<dataset_name>/` and include:
 
-- `model.joblib`
+- `model.pt`
+- `preprocessor.joblib`
 - `metrics.json`
 - `metadata.json`
 - `dataset.csv`
