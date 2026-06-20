@@ -33,12 +33,18 @@ def main() -> int:
     coordinator = AuditCoordinator(llm=llm)
     validation_set = build_demo_validation_set()
     user_query = (
-        "Audit whether these validation-set explanations are trustworthy, usable, and understandable "
-        "for internal reviewers and for a customer affected by the credit decision."
+        "Audit whether these validation-set explanations calibrate trust, support action, and remain understandable "
+        "for the stakeholders involved in this credit decision workflow."
+    )
+    scenario_description = (
+        "A bank uses a black-box credit approval model to screen loan applications. "
+        "The resulting explanations are shown to a loan officer who decides whether to request more documentation "
+        "and to the applicant who wants to understand the outcome and what can improve future approval chances."
     )
 
     result = coordinator.audit(
         user_query=user_query,
+        scenario_description=scenario_description,
         validation_set=validation_set,
         model=predictor,
         explainer=explainer,

@@ -3,7 +3,13 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
-from .types import PersonaEvaluationInteraction, PersonaQuestionAnswer, PersonaReview
+from .types import (
+    PersonaEvaluationInteraction,
+    PersonaQuestionAnswer,
+    PersonaReview,
+    PersonaTrustAnswer,
+    PersonaUsabilityRating,
+)
 
 
 def compose_persona_reviews(
@@ -20,6 +26,7 @@ def compose_persona_reviews(
         ordered_interactions[persona].append(
             PersonaEvaluationInteraction(
                 persona=persona,
+                stakeholder_role=record.get("stakeholder_role", ""),
                 dimension=dimension,
                 coordinator_prompt=record["coordinator_prompt"],
                 persona_response=record["persona_response"],
@@ -28,36 +35,43 @@ def compose_persona_reviews(
 
     reviews: list[PersonaReview] = []
     for persona in sorted(grouped):
-        trust_data = grouped[persona].get("trust", [{}])[0]
-        usability_data = grouped[persona].get("usability", [{}])[0]
-        understanding_data = _merge_understanding_records(grouped[persona].get("understanding", []))
-        graded_understanding = _grade_understanding(understanding_data, sampled_cases)
-
-        strengths = _merge_unique_lists(
-            trust_data.get("strengths", []),
-            usability_data.get("strengths", []),
+        trust_result = _grade_trust(grouped[persona].get("trust", []), sampled_cases)
+        usability_result = _grade_usability(grouped[persona].get("usability", []))
+        understandability_result = _grade_understandability(
+            grouped[persona].get("understandability", []),
+            sampled_cases,
         )
-        concerns = _merge_unique_lists(
-            trust_data.get("concerns", []),
-            usability_data.get("concerns", []),
-        )
+        stakeholder_role = ordered_interactions[persona][0].stakeholder_role if ordered_interactions[persona] else ""
 
         reviews.append(
             PersonaReview(
                 persona=persona,
-                trust_score=_clamp_five_point_score(trust_data.get("trust_score", 1)),
-                trust_rationale=trust_data.get("trust_rationale", ""),
-                usability_score=_clamp_five_point_score(usability_data.get("usability_score", 1)),
-                usability_rationale=usability_data.get("usability_rationale", ""),
-                understanding_score=graded_understanding["understanding_score"],
-                understanding_summary=graded_understanding["understanding_summary"],
-                strengths=strengths,
-                concerns=concerns,
+                stakeholder_role=stakeholder_role,
+                trust_score=trust_result["trust_score"],
+                trust_rationale=trust_result["trust_rationale"],
+                usability_score=usability_result["usability_score"],
+                usability_rationale=usability_result["usability_rationale"],
+                understandability_score=understandability_result["understandability_score"],
+                understandability_summary=understandability_result["understandability_summary"],
+                strengths=[],
+                concerns=[],
+                trust_answers=[
+                    PersonaTrustAnswer(**answer)
+                    for answer in trust_result["trust_answers"]
+                ],
+                usability_ratings=[
+                    PersonaUsabilityRating(**rating)
+                    for rating in usability_result["usability_ratings"]
+                ],
                 question_answers=[
                     PersonaQuestionAnswer(**answer)
-                    for answer in graded_understanding["question_answers"]
+                    for answer in understandability_result["question_answers"]
                 ],
-                scoring_breakdown=graded_understanding["scoring_breakdown"],
+                scoring_breakdown={
+                    "trust": trust_result["scoring_breakdown"],
+                    "usability": usability_result["scoring_breakdown"],
+                    "understandability": understandability_result["scoring_breakdown"],
+                },
                 interaction_history=ordered_interactions[persona],
             )
         )
@@ -65,46 +79,102 @@ def compose_persona_reviews(
     return reviews
 
 
-def _merge_understanding_records(records: list[dict[str, Any]]) -> dict[str, Any]:
-    merged = {
-        "understanding_observations": "",
-        "question_answers": [],
-    }
-    for record in records:
-        observation = record.get("understanding_observations", "").strip()
-        if observation and not merged["understanding_observations"]:
-            merged["understanding_observations"] = observation
-        if "question_id" in record:
-            merged["question_answers"].append(
-                {
-                    "question_id": record["question_id"],
-                    "predicted_label": record["predicted_label"],
-                    "predicted_score_direction": record["predicted_score_direction"],
-                }
-            )
-        elif "question_answers" in record:
-            merged["question_answers"].extend(record["question_answers"])
-    return merged
-
-
 def aggregate_scores(persona_reviews: list[PersonaReview]) -> dict[str, float]:
     if not persona_reviews:
         return {
             "trust_score_avg": 0.0,
             "usability_score_avg": 0.0,
-            "understanding_score_avg": 0.0,
+            "understandability_score_avg": 0.0,
         }
 
     count = len(persona_reviews)
     return {
-        "trust_score_avg": round(sum(review.trust_score for review in persona_reviews) / count, 2),
-        "usability_score_avg": round(sum(review.usability_score for review in persona_reviews) / count, 2),
-        "understanding_score_avg": round(sum(review.understanding_score for review in persona_reviews) / count, 2),
+        "trust_score_avg": round(sum(review.trust_score for review in persona_reviews) / count, 4),
+        "usability_score_avg": round(sum(review.usability_score for review in persona_reviews) / count, 4),
+        "understandability_score_avg": round(
+            sum(review.understandability_score for review in persona_reviews) / count,
+            4,
+        ),
     }
 
 
-def _grade_understanding(
-    understanding_data: dict[str, Any],
+def _grade_trust(
+    trust_records: list[dict[str, Any]],
+    sampled_cases: list[dict[str, Any]],
+) -> dict[str, Any]:
+    correctness_key = {
+        f"{record['sample_id']}_trust": bool(record["prediction_is_correct"])
+        for record in sampled_cases
+        if record.get("prediction_is_correct") is not None
+    }
+    graded_answers: list[dict[str, Any]] = []
+    aligned = 0
+    total = 0
+
+    for answer in trust_records:
+        question_id = str(answer.get("question_id", "")).strip()
+        actual_correct = correctness_key.get(question_id)
+        if actual_correct is None:
+            continue
+        perceived_correct = bool(answer.get("perceived_correct"))
+        is_alignment_correct = perceived_correct == actual_correct
+        graded_answers.append(
+            PersonaTrustAnswer(
+                question_id=question_id,
+                perceived_correct=perceived_correct,
+                actual_correct=actual_correct,
+                is_alignment_correct=is_alignment_correct,
+            ).to_dict()
+        )
+        aligned += int(is_alignment_correct)
+        total += 1
+
+    trust_score = (aligned / total) if total else 0.0
+    return {
+        "trust_score": round(trust_score, 4),
+        "trust_rationale": f"Perceived correctness aligned with actual correctness on {aligned}/{total} samples." if total else "No trust questions were graded.",
+        "trust_answers": graded_answers,
+        "scoring_breakdown": {
+            "questions_graded": total,
+            "aligned_judgments": aligned,
+            "accuracy": round(trust_score, 4),
+        },
+    }
+
+
+def _grade_usability(usability_records: list[dict[str, Any]]) -> dict[str, Any]:
+    ratings: list[dict[str, Any]] = []
+    numeric_scores: list[int] = []
+
+    for answer in usability_records:
+        question_id = str(answer.get("question_id", "")).strip()
+        try:
+            usability_score = max(1, min(5, int(answer.get("usability_score", 1))))
+        except (TypeError, ValueError):
+            usability_score = 1
+        ratings.append(
+            PersonaUsabilityRating(
+                question_id=question_id,
+                usability_score=usability_score,
+            ).to_dict()
+        )
+        numeric_scores.append(usability_score)
+
+    average_score = (sum(numeric_scores) / len(numeric_scores)) if numeric_scores else 0.0
+    return {
+        "usability_score": round(average_score, 4),
+        "usability_rationale": f"Average usability score was {average_score:.2f} across {len(numeric_scores)} samples." if numeric_scores else "No usability questions were graded.",
+        "usability_ratings": ratings,
+        "scoring_breakdown": {
+            "questions_graded": len(numeric_scores),
+            "score_sum": sum(numeric_scores),
+            "average": round(average_score, 4),
+        },
+    }
+
+
+def _grade_understandability(
+    understandability_records: list[dict[str, Any]],
     sampled_cases: list[dict[str, Any]],
 ) -> dict[str, Any]:
     answer_key = {
@@ -116,18 +186,20 @@ def _grade_understanding(
     points_earned = 0
     points_possible = 0
 
-    for answer in understanding_data.get("question_answers", []):
-        expected = answer_key.get(answer["question_id"])
+    for answer in understandability_records:
+        question_id = str(answer.get("question_id", "")).strip()
+        expected = answer_key.get(question_id)
         if expected is None:
             continue
-        is_label_correct = str(answer["predicted_label"]).strip().lower() == expected["expected_label"].strip().lower()
-        is_direction_correct = answer["predicted_score_direction"] == expected["expected_score_direction"]
+        predicted_label = str(answer.get("predicted_label", "")).strip()
+        predicted_direction = str(answer.get("predicted_score_direction", "")).strip()
+        is_label_correct = predicted_label.lower() == str(expected["expected_label"]).strip().lower()
+        is_direction_correct = predicted_direction == expected["expected_score_direction"]
         graded_answers.append(
             PersonaQuestionAnswer(
-                question_id=answer["question_id"],
-                predicted_label=answer["predicted_label"],
-                predicted_score_direction=answer["predicted_score_direction"],
-                reasoning=answer.get("reasoning", ""),
+                question_id=question_id,
+                predicted_label=predicted_label,
+                predicted_score_direction=predicted_direction,  # type: ignore[arg-type]
                 is_label_correct=is_label_correct,
                 is_direction_correct=is_direction_correct,
             ).to_dict()
@@ -136,14 +208,9 @@ def _grade_understanding(
         points_possible += 2
 
     accuracy = (points_earned / points_possible) if points_possible else 0.0
-    understanding_summary = (
-        f"{understanding_data.get('understanding_observations', '').strip()} "
-        f"Quiz accuracy was {accuracy:.0%} across {points_possible // 2} perturbation questions."
-    ).strip()
-
     return {
-        "understanding_score": _accuracy_to_five_point_scale(accuracy),
-        "understanding_summary": understanding_summary,
+        "understandability_score": round(accuracy, 4),
+        "understandability_summary": f"Perturbation-question accuracy was {accuracy:.0%} across {points_possible // 2} samples." if points_possible else "No understandability questions were graded.",
         "question_answers": graded_answers,
         "scoring_breakdown": {
             "questions_graded": points_possible // 2,
@@ -152,35 +219,3 @@ def _grade_understanding(
             "accuracy": round(accuracy, 4),
         },
     }
-
-
-def _accuracy_to_five_point_scale(accuracy: float) -> int:
-    if accuracy <= 0.2:
-        return 1
-    if accuracy <= 0.4:
-        return 2
-    if accuracy <= 0.6:
-        return 3
-    if accuracy <= 0.8:
-        return 4
-    return 5
-
-
-def _clamp_five_point_score(value: Any) -> int:
-    try:
-        numeric = int(value)
-    except (TypeError, ValueError):
-        return 1
-    return max(1, min(5, numeric))
-
-
-def _merge_unique_lists(*groups: list[str]) -> list[str]:
-    seen: set[str] = set()
-    merged: list[str] = []
-    for group in groups:
-        for item in group:
-            normalized = item.strip()
-            if normalized and normalized not in seen:
-                seen.add(normalized)
-                merged.append(normalized)
-    return merged

@@ -53,7 +53,42 @@ class SampleAuditRecord:
     instance: TabularRow
     prediction: PredictionResult
     explanation: LocalExplanation
+    ground_truth_label: str | None = None
+    prediction_is_correct: bool | None = None
     perturbation_questions: list[PerturbationQuestion] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class StakeholderProfile:
+    stakeholder_id: str
+    display_name: str
+    role: str
+    expertise_summary: str
+    decision_context: str
+    explanation_needs: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class PersonaTrustAnswer:
+    question_id: str
+    perceived_correct: bool
+    actual_correct: bool = False
+    is_alignment_correct: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class PersonaUsabilityRating:
+    question_id: str
+    usability_score: int
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -75,7 +110,8 @@ class PersonaQuestionAnswer:
 @dataclass
 class PersonaEvaluationInteraction:
     persona: str
-    dimension: Literal["trust", "usability", "understanding"]
+    stakeholder_role: str
+    dimension: Literal["trust", "usability", "understandability"]
     coordinator_prompt: str
     persona_response: dict[str, Any]
 
@@ -86,14 +122,17 @@ class PersonaEvaluationInteraction:
 @dataclass
 class PersonaReview:
     persona: str
-    trust_score: int
+    stakeholder_role: str
+    trust_score: float
     trust_rationale: str
-    usability_score: int
+    usability_score: float
     usability_rationale: str
-    understanding_score: int
-    understanding_summary: str
+    understandability_score: float
+    understandability_summary: str
     strengths: list[str]
     concerns: list[str]
+    trust_answers: list[PersonaTrustAnswer] = field(default_factory=list)
+    usability_ratings: list[PersonaUsabilityRating] = field(default_factory=list)
     question_answers: list[PersonaQuestionAnswer] = field(default_factory=list)
     scoring_breakdown: dict[str, Any] = field(default_factory=dict)
     interaction_history: list[PersonaEvaluationInteraction] = field(default_factory=list)
@@ -106,12 +145,17 @@ class PersonaReview:
 class AuditCsvRow:
     row_type: Literal["stage", "interaction", "overall"]
     persona: str
+    stakeholder_role: str
     stage: str
     aspect: str
     score: float | None = None
     summary: str = ""
     sample_id: str = ""
     question_id: str = ""
+    perceived_correct: str = ""
+    actual_correct: str = ""
+    is_alignment_correct: str = ""
+    usability_rating: float | None = None
     predicted_label: str = ""
     predicted_score_direction: str = ""
     is_label_correct: str = ""

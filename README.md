@@ -2,27 +2,25 @@
 
 This project implements a prototype framework for auditing the explanations emitted by a fixed explainability method on tabular data.
 
-The current workflow is validation-set driven and iterative:
+The current workflow is validation-set driven, scenario-aware, and iterative:
 
 1. The LangGraph coordinator receives:
    - a black-box tabular model
    - a fixed explanation algorithm
    - a validation set
+   - an optional deployment scenario description
 2. The coordinator selects between 5 and 10 representative samples from the validation set.
 3. For each selected sample, the framework extracts:
    - the black-box model output
    - the explanation method output
    - a perturbation question whose answer can be checked against the black-box model
-4. Three persona agents review the same sampled evidence:
-   - data scientist
-   - business executive
-   - end user
-5. For each persona, the audit coordinator runs three separate interactions over the same validation samples:
+4. The audit agent uses the deployment scenario to determine which stakeholder personas should be involved in the evaluation.
+5. For each stakeholder, the audit coordinator runs three separate interactions over the same validation samples:
    - trust evaluation only
    - usability evaluation only
-   - understanding evaluation only
-6. Understanding is measured by how well the persona predicts the black-box model output on perturbed samples.
-7. The coordinator exports a CSV with staged persona outcomes and overall aspect scores.
+   - understandability evaluation only
+6. Trust is measured through correctness-alignment on labeled validation samples, usability through per-sample stakeholder ratings, and understandability through perturbation-question accuracy.
+7. The coordinator exports a CSV with staged stakeholder outcomes and overall aspect scores.
 
 The orchestration layer uses `LangGraph`, while LLM interactions use `LangChain`.
 
@@ -31,9 +29,9 @@ The orchestration layer uses `LangGraph`, while LLM interactions use `LangChain`
 - `src/xai_audit/interfaces.py`: black-box model and explainer protocols
 - `src/xai_audit/model_utils.py`: helpers for model predictions and score extraction
 - `src/xai_audit/questionnaire.py`: validation-set sampling and perturbation-question generation
-- `src/xai_audit/persona_processing.py`: iterative persona-response grading and aggregation
+- `src/xai_audit/persona_processing.py`: iterative stakeholder-response grading and aggregation
 - `src/xai_audit/csv_export.py`: deterministic CSV generation for stage outcomes and overall scores
-- `src/xai_audit/graph.py`: LangGraph coordinator and staged persona workflow
+- `src/xai_audit/graph.py`: LangGraph audit agent, stakeholder planning, and staged workflow
 - `src/xai_audit/simple_xai.py`: demo black-box model, fixed explainer, and demo validation set
 - `src/xai_audit/technical.py`: optional technical metrics retained from the earlier prototype
 - `src/xai_audit/benchmarks/datasets.py`: finance and healthcare benchmark dataset loaders
@@ -41,15 +39,15 @@ The orchestration layer uses `LangGraph`, while LLM interactions use `LangChain`
 - `src/xai_audit/benchmarks/training.py`: neural baseline training and artifact export
 - `src/xai_audit/artifact_adapters.py`: black-box wrapper for trained artifacts
 - `src/xai_audit/explainers/`: extendable audit-ready explainer adapters
-- `scripts/train_benchmark_models.py`: CLI for fetching datasets, training models, and saving results
-- `scripts/audit_trained_model_explainers.py`: CLI for launching the audit framework on dynamic SHAP/LIME explanations
+- `src/scripts/train_benchmark_models.py`: CLI for fetching datasets, training models, and saving results
+- `src/scripts/audit_trained_model_explainers.py`: CLI for launching the audit framework on dynamic SHAP/LIME explanations
 - `examples/run_demo.py`: runnable demonstration
 
 ## Core Assumptions
 
 - The black-box model can be queried on one or more tabular rows.
 - The fixed XAI method produces local explanations one sample at a time.
-- The validation set contains at least 5 tabular rows.
+- The validation set contains at least 5 labeled tabular rows so that trust can be graded against true correctness.
 - Sampled perturbation questions are generated from numeric features with strong local attribution magnitude.
 - Understanding is operationalized as persona accuracy on perturbation questions.
 
@@ -75,10 +73,11 @@ The demo writes `audit_outcomes.csv` and prints its path.
 
 The CSV contains:
 
-- one row for each persona-stage outcome
-- one row for each understanding-question interaction
-- one row for the understanding observation interaction
-- one overall row for each evaluated aspect: trust, usability, understanding
+- one row for each stakeholder-stage outcome
+- one row for each trust-question interaction
+- one row for each usability-question interaction
+- one row for each understandability-question interaction
+- one overall row for each evaluated aspect: trust, usability, understandability
 
 ## Using Your Own Model And Explainer
 
@@ -87,15 +86,17 @@ Implement these two protocols:
 - `TabularBlackBoxModel`
 - `FixedTabularExplainer`
 
-Then call `AuditCoordinator.audit(...)` with your validation set. If you want a file written automatically, pass `csv_output_path=...`.
+Then call `AuditCoordinator.audit(...)` with your validation set. If you also pass `scenario_description=...`, the audit agent will plan stakeholder personas from the deployment setting. If you want a file written automatically, pass `csv_output_path=...`.
 
 ## Notes
 
 - Sample selection is deterministic and score-spread based.
-- Trust, usability, and understanding are evaluated one at a time in separate coordinator-persona interactions.
-- The understanding score is derived automatically from persona quiz accuracy, then mapped to a 1 to 5 scale.
+- Trust, usability, and understandability are evaluated one at a time in separate coordinator-stakeholder interactions.
+- The trust score is the fraction of cases in which perceived prediction correctness matches actual correctness.
+- The usability score is the average of the stakeholder's per-sample usability ratings.
+- The understandability score is derived automatically from perturbation-question accuracy.
 - No LLM-based final report is generated; the final artifact is a deterministic CSV.
-- The prototype is intentionally compact so you can swap in stronger explainers, richer questionnaires, or more sophisticated sample selection later.
+- The prototype is intentionally compact so you can swap in stronger explainers, richer questionnaires, more specialized stakeholders, or more sophisticated sample selection later.
 
 ## Benchmark Datasets
 
@@ -113,7 +114,7 @@ Each benchmark is paired with a PyTorch MLP baseline for tabular binary classifi
 After installing dependencies, run:
 
 ```bash
-PYTHONPATH=src python3 scripts/train_benchmark_models.py --datasets all
+PYTHONPATH=src python3 src/scripts/train_benchmark_models.py --datasets all
 ```
 
 Artifacts are saved under `artifacts/benchmark_models/<dataset_name>/` and include:
@@ -131,7 +132,7 @@ Artifacts are saved under `artifacts/benchmark_models/<dataset_name>/` and inclu
 After training, run:
 
 ```bash
-PYTHONPATH=src python3 scripts/audit_trained_model_explainers.py --dataset german_credit --methods shap lime
+PYTHONPATH=src python3 src/scripts/audit_trained_model_explainers.py --dataset german_credit --methods shap lime
 ```
 
 This script:
@@ -140,9 +141,10 @@ This script:
 2. loads its preprocessing pipeline
 3. uses the saved holdout split as the validation set
 4. lets the audit coordinator autonomously select representative validation samples
-5. dynamically generates explanations for those samples with SHAP or LIME
-6. launches the same iterative audit workflow used in `examples/run_demo.py`
-7. writes one audit CSV per explanation method
+5. uses the deployment scenario to instantiate the relevant stakeholder personas
+6. dynamically generates explanations for those samples with SHAP or LIME
+7. launches the same iterative audit workflow used in `examples/run_demo.py`
+8. writes one audit CSV per explanation method
 
 Outputs are saved under `artifacts/audit_outputs/<dataset_name>/`:
 

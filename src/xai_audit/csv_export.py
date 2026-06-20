@@ -17,7 +17,6 @@ def build_csv_artifact(
     csv_path: str | None = None,
 ) -> AuditCsvArtifact:
     rows = _build_csv_rows(
-        interaction_records=interaction_records,
         persona_reviews=persona_reviews,
         aggregate_scores=aggregate_scores,
     )
@@ -41,7 +40,6 @@ def build_csv_artifact(
 
 def _build_csv_rows(
     *,
-    interaction_records: list[dict[str, Any]],
     persona_reviews: list[PersonaReview],
     aggregate_scores: dict[str, float],
 ) -> list[AuditCsvRow]:
@@ -52,35 +50,66 @@ def _build_csv_rows(
             AuditCsvRow(
                 row_type="stage",
                 persona=review.persona,
+                stakeholder_role=review.stakeholder_role,
                 stage="trust",
                 aspect="trust",
-                score=float(review.trust_score),
+                score=review.trust_score,
                 summary=review.trust_rationale,
-                strengths=" | ".join(review.strengths),
-                concerns=" | ".join(review.concerns),
+                accuracy=_nested_accuracy(review.scoring_breakdown, "trust"),
             )
         )
+        for answer in review.trust_answers:
+            rows.append(
+                AuditCsvRow(
+                    row_type="interaction",
+                    persona=review.persona,
+                    stakeholder_role=review.stakeholder_role,
+                    stage="trust_question",
+                    aspect="trust",
+                    question_id=answer.question_id,
+                    sample_id=_sample_id_from_question(answer.question_id),
+                    perceived_correct=str(answer.perceived_correct),
+                    actual_correct=str(answer.actual_correct),
+                    is_alignment_correct=str(answer.is_alignment_correct),
+                )
+            )
+
         rows.append(
             AuditCsvRow(
                 row_type="stage",
                 persona=review.persona,
+                stakeholder_role=review.stakeholder_role,
                 stage="usability",
                 aspect="usability",
-                score=float(review.usability_score),
+                score=review.usability_score,
                 summary=review.usability_rationale,
-                strengths=" | ".join(review.strengths),
-                concerns=" | ".join(review.concerns),
+                accuracy=_nested_accuracy(review.scoring_breakdown, "usability"),
             )
         )
+        for rating in review.usability_ratings:
+            rows.append(
+                AuditCsvRow(
+                    row_type="interaction",
+                    persona=review.persona,
+                    stakeholder_role=review.stakeholder_role,
+                    stage="usability_question",
+                    aspect="usability",
+                    question_id=rating.question_id,
+                    sample_id=_sample_id_from_question(rating.question_id),
+                    usability_rating=float(rating.usability_score),
+                )
+            )
+
         rows.append(
             AuditCsvRow(
                 row_type="stage",
                 persona=review.persona,
-                stage="understanding",
-                aspect="understanding",
-                score=float(review.understanding_score),
-                summary=review.understanding_summary,
-                accuracy=_coerce_accuracy(review.scoring_breakdown.get("accuracy")),
+                stakeholder_role=review.stakeholder_role,
+                stage="understandability",
+                aspect="understandability",
+                score=review.understandability_score,
+                summary=review.understandability_summary,
+                accuracy=_nested_accuracy(review.scoring_breakdown, "understandability"),
             )
         )
         for answer in review.question_answers:
@@ -88,8 +117,9 @@ def _build_csv_rows(
                 AuditCsvRow(
                     row_type="interaction",
                     persona=review.persona,
-                    stage="understanding_question",
-                    aspect="understanding",
+                    stakeholder_role=review.stakeholder_role,
+                    stage="understandability_question",
+                    aspect="understandability",
                     question_id=answer.question_id,
                     sample_id=_sample_id_from_question(answer.question_id),
                     predicted_label=answer.predicted_label,
@@ -99,26 +129,12 @@ def _build_csv_rows(
                 )
             )
 
-    for record in interaction_records:
-        if record["dimension"] != "understanding":
-            continue
-        response = record["persona_response"]
-        if "understanding_observations" in response:
-            rows.append(
-                AuditCsvRow(
-                    row_type="interaction",
-                    persona=record["persona"],
-                    stage="understanding_observation",
-                    aspect="understanding",
-                    summary=response["understanding_observations"],
-                )
-            )
-
     rows.extend(
         [
             AuditCsvRow(
                 row_type="overall",
                 persona="ALL",
+                stakeholder_role="ALL",
                 stage="overall",
                 aspect="trust",
                 score=aggregate_scores.get("trust_score_avg"),
@@ -126,6 +142,7 @@ def _build_csv_rows(
             AuditCsvRow(
                 row_type="overall",
                 persona="ALL",
+                stakeholder_role="ALL",
                 stage="overall",
                 aspect="usability",
                 score=aggregate_scores.get("usability_score_avg"),
@@ -133,9 +150,10 @@ def _build_csv_rows(
             AuditCsvRow(
                 row_type="overall",
                 persona="ALL",
+                stakeholder_role="ALL",
                 stage="overall",
-                aspect="understanding",
-                score=aggregate_scores.get("understanding_score_avg"),
+                aspect="understandability",
+                score=aggregate_scores.get("understandability_score_avg"),
             ),
         ]
     )
@@ -153,11 +171,18 @@ def _render_csv(rows: list[AuditCsvRow]) -> str:
 
 
 def _sample_id_from_question(question_id: str) -> str:
+    if question_id.endswith("_trust"):
+        return question_id[:-6]
+    if question_id.endswith("_usability"):
+        return question_id[:-10]
     parts = question_id.split("_q", maxsplit=1)
     return parts[0] if parts else ""
 
 
-def _coerce_accuracy(value: Any) -> float | None:
-    if value is None:
-        return None
-    return float(value)
+def _nested_accuracy(scoring_breakdown: dict[str, Any], key: str) -> float | None:
+    section = scoring_breakdown.get(key, {})
+    if "accuracy" in section:
+        return float(section["accuracy"])
+    if "average" in section:
+        return float(section["average"])
+    return None
