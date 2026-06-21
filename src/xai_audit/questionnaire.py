@@ -91,11 +91,35 @@ def select_validation_indices(
     sample_count: int,
     focus_label: str | None = None,
 ) -> list[int]:
-    scored_rows = [
-        (index, predict_single(model, _split_instance_and_target(row, model)[0], focus_label=focus_label).score)
-        for index, row in enumerate(validation_set)
-    ]
-    ranked = sorted(scored_rows, key=lambda item: item[1])
+    scored_rows: list[dict[str, object]] = []
+    for index, row in enumerate(validation_set):
+        instance, ground_truth_label = _split_instance_and_target(row, model)
+        prediction = predict_single(model, instance, focus_label=focus_label)
+        scored_rows.append(
+            {
+                "index": index,
+                "score": prediction.score,
+                "predicted_label": prediction.label,
+                "ground_truth_label": ground_truth_label,
+                "is_correct": (
+                    prediction.label == ground_truth_label
+                    if ground_truth_label is not None
+                    else None
+                ),
+            }
+        )
+
+    stratified_indices = _select_stratified_validation_indices(
+        scored_rows=scored_rows,
+        sample_count=sample_count,
+    )
+    if stratified_indices:
+        return stratified_indices
+
+    ranked = sorted(
+        ((int(row["index"]), float(row["score"])) for row in scored_rows),
+        key=lambda item: item[1],
+    )
     if sample_count >= len(ranked):
         return [index for index, _ in ranked]
 
@@ -290,3 +314,107 @@ def _normalize_ground_truth_label(
         if 0 <= index < len(classes):
             return classes[index]
     return normalized
+
+
+def _select_stratified_validation_indices(
+    *,
+    scored_rows: Sequence[dict[str, object]],
+    sample_count: int,
+) -> list[int]:
+    labeled_rows = [
+        row
+        for row in scored_rows
+        if row.get("ground_truth_label") is not None and row.get("is_correct") is not None
+    ]
+    if not labeled_rows:
+        return []
+
+    class_labels = sorted({str(row["ground_truth_label"]) for row in labeled_rows})
+    bucket_queues: dict[tuple[str, bool], list[int]] = {}
+    for class_label in class_labels:
+        for correctness in (False, True):
+            bucket_rows = [
+                row
+                for row in labeled_rows
+                if str(row["ground_truth_label"]) == class_label and bool(row["is_correct"]) is correctness
+            ]
+            if not bucket_rows:
+                continue
+            bucket_queues[(class_label, correctness)] = _ordered_bucket_indices(bucket_rows)
+
+    if not bucket_queues:
+        return []
+
+    selected: list[int] = []
+    selected_set: set[int] = set()
+    bucket_order: list[tuple[str, bool]] = []
+    for correctness in (False, True):
+        for class_label in class_labels:
+            key = (class_label, correctness)
+            if key in bucket_queues:
+                bucket_order.append(key)
+
+    while len(selected) < sample_count:
+        progress_made = False
+        for bucket_key in bucket_order:
+            queue = bucket_queues.get(bucket_key, [])
+            while queue and queue[0] in selected_set:
+                queue.pop(0)
+            if not queue:
+                continue
+            index = queue.pop(0)
+            selected.append(index)
+            selected_set.add(index)
+            progress_made = True
+            if len(selected) >= sample_count:
+                break
+        if not progress_made:
+            break
+
+    if len(selected) >= sample_count:
+        return selected
+
+    remaining_ranked = sorted(
+        (
+            (int(row["index"]), float(row["score"]))
+            for row in scored_rows
+            if int(row["index"]) not in selected_set
+        ),
+        key=lambda item: item[1],
+    )
+    remaining_needed = sample_count - len(selected)
+    selected.extend(_score_spread_indices(remaining_ranked, remaining_needed))
+    return selected
+
+
+def _ordered_bucket_indices(bucket_rows: Sequence[dict[str, object]]) -> list[int]:
+    ranked = sorted(
+        ((int(row["index"]), float(row["score"])) for row in bucket_rows),
+        key=lambda item: item[1],
+    )
+    return _score_spread_indices(ranked, len(ranked))
+
+
+def _score_spread_indices(
+    ranked_rows: Sequence[tuple[int, float]],
+    sample_count: int,
+) -> list[int]:
+    if not ranked_rows or sample_count <= 0:
+        return []
+    if sample_count >= len(ranked_rows):
+        return [index for index, _ in ranked_rows]
+
+    chosen_positions: list[int] = []
+    max_position = len(ranked_rows) - 1
+    for slot in range(sample_count):
+        raw_position = floor((slot * max_position) / (sample_count - 1)) if sample_count > 1 else 0
+        if raw_position not in chosen_positions:
+            chosen_positions.append(raw_position)
+
+    probe = 0
+    while len(chosen_positions) < sample_count:
+        if probe not in chosen_positions:
+            chosen_positions.append(probe)
+        probe += 1
+
+    return [ranked_rows[position][0] for position in sorted(chosen_positions)]

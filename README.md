@@ -90,7 +90,7 @@ Then call `AuditCoordinator.audit(...)` with your validation set. If you also pa
 
 ## Notes
 
-- Sample selection is deterministic and score-spread based.
+- Sample selection is deterministic and stratified to promote coverage of classes, correct predictions, and misclassifications; when labels are unavailable, it falls back to score-spread sampling.
 - Trust, usability, and understandability are evaluated one at a time in separate coordinator-stakeholder interactions.
 - The trust score is the fraction of cases in which perceived prediction correctness matches actual correctness.
 - The usability score is the average of the stakeholder's per-sample usability ratings.
