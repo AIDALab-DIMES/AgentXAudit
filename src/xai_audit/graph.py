@@ -227,7 +227,7 @@ def _infer_stakeholders_with_llm(
                 """
 You are the audit agent orchestrating a human-centered XAI assessment.
 From the deployment scenario, identify the stakeholder categories that directly receive explanations or act on them.
-Prefer 2 to 4 stakeholders. Distinguish stakeholders with different expertise and decision responsibilities.
+Distinguish stakeholders with different expertise and decision responsibilities.
 Keep stakeholder_id short and snake_case.
 """.strip(),
             ),
