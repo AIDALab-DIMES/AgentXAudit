@@ -74,6 +74,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Positive class label used for score-focused auditing. Defaults to the dataset positive class from metadata.",
     )
+    parser.add_argument(
+        "--scenario-description",
+        default=None,
+        help="Optional deployment scenario used by the audit agent to plan the stakeholder personas.",
+    )
     return parser
 
 
@@ -86,6 +91,10 @@ def main() -> int:
 
     bundle = load_trained_model_bundle(dataset_name=args.dataset, artifact_root=args.artifact_root)
     focus_label = args.focus_label or str(bundle.metadata.get("positive_class", "positive"))
+    scenario_description = args.scenario_description or _default_scenario_description(
+        dataset_name=args.dataset,
+        metadata=bundle.metadata,
+    )
     model = ArtifactBackedBlackBoxModel(
         bundle=bundle,
         positive_label=focus_label,
@@ -98,7 +107,8 @@ def main() -> int:
     validation_frame = pd.read_csv(validation_csv_path)
     dataset_frame = pd.read_csv(dataset_csv_path)
     feature_names = bundle.feature_names
-    validation_set = validation_frame[feature_names].to_dict(orient="records")
+    validation_columns = feature_names + [column for column in ("target",) if column in validation_frame.columns]
+    validation_set = validation_frame[validation_columns].to_dict(orient="records")
     background_data = dataset_frame[feature_names].sample(
         n=min(args.background_size, len(dataset_frame)),
         random_state=args.random_state,
@@ -125,8 +135,9 @@ def main() -> int:
         result = coordinator.audit(
             user_query=(
                 f"Audit the {method_name.upper()} explanations produced for the trained {args.dataset} tabular model. "
-                "Assess trust, usability, and understanding for internal reviewers and affected users."
+                "Assess trust calibration, usability for downstream decisions, and understandability for the involved stakeholders."
             ),
+            scenario_description=scenario_description,
             validation_set=validation_set,
             model=model,
             explainer=explainer,
@@ -145,6 +156,27 @@ def main() -> int:
     manifest_path.write_text(json.dumps(run_manifest, indent=2, sort_keys=True), encoding="utf-8")
     print(json.dumps({"manifest_path": str(manifest_path.resolve()), "methods": method_names}, indent=2))
     return 0
+
+
+def _default_scenario_description(*, dataset_name: str, metadata: dict[str, object]) -> str:
+    domain = str(metadata.get("domain", "")).strip().lower()
+    positive_class = str(metadata.get("positive_class", "positive"))
+    if domain == "healthcare":
+        return (
+            f"A healthcare provider uses the {dataset_name} model to flag patients at risk of {positive_class}. "
+            "The explanations are shown to a clinician who decides follow-up tests or treatment changes and to the patient, "
+            "who uses the explanation to understand risk factors and recommended behavioral changes."
+        )
+    if domain == "finance":
+        return (
+            f"A financial institution uses the {dataset_name} model to support decisions related to {positive_class}. "
+            "The explanations are shown to an internal decision maker who decides follow-up review actions and to the affected customer, "
+            "who uses the explanation to understand the decision and possible next steps."
+        )
+    return (
+        f"A tabular classification model for {dataset_name} predicts {positive_class}. "
+        "Its explanations are provided both to a domain expert who acts on the prediction and to an affected end user."
+    )
 
 
 if __name__ == "__main__":

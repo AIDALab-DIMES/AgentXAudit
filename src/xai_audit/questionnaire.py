@@ -51,7 +51,8 @@ def build_sample_audit_records(
 
     records: list[SampleAuditRecord] = []
     for record_id, index in enumerate(selected_indices, start=1):
-        instance = dict(validation_set[index])
+        raw_row = dict(validation_set[index])
+        instance, ground_truth_label = _split_instance_and_target(raw_row, model)
         prediction = predict_single(model, instance, focus_label=focus_label)
         explanation = explainer.explain_instance(
             model,
@@ -73,6 +74,10 @@ def build_sample_audit_records(
                 instance=instance,
                 prediction=prediction,
                 explanation=explanation,
+                ground_truth_label=ground_truth_label,
+                prediction_is_correct=(
+                    prediction.label == ground_truth_label if ground_truth_label is not None else None
+                ),
                 perturbation_questions=[question] if question is not None else [],
             )
         )
@@ -87,7 +92,7 @@ def select_validation_indices(
     focus_label: str | None = None,
 ) -> list[int]:
     scored_rows = [
-        (index, predict_single(model, row, focus_label=focus_label).score)
+        (index, predict_single(model, _split_instance_and_target(row, model)[0], focus_label=focus_label).score)
         for index, row in enumerate(validation_set)
     ]
     ranked = sorted(scored_rows, key=lambda item: item[1])
@@ -183,13 +188,12 @@ def user_visible_records(records: Sequence[SampleAuditRecord]) -> list[dict[str,
 def build_persona_stage_packet(
     records: Sequence[SampleAuditRecord],
     *,
-    dimension: Literal["trust", "usability", "understanding"],
+    dimension: Literal["trust", "usability", "understandability"],
     top_attributions: int = 3,
 ) -> str:
     sections: list[str] = []
     for record in records:
         model_output = f"label={record.prediction.label}, score={record.prediction.score:.3f}"
-        top_features = _format_top_attributions(record, top_attributions)
         explanation_line = (
             record.explanation.explanation_text
             if record.explanation.explanation_text
@@ -200,11 +204,10 @@ def build_persona_stage_packet(
             f"{record.sample_id}",
             f"instance: {_format_instance(record.instance)}",
             f"model_output: {model_output}",
-            f"top_attributions: {top_features}",
-            f"explanation_summary: {explanation_line}",
+            f"explanation: {explanation_line}",
         ]
 
-        if dimension == "understanding":
+        if dimension == "understandability":
             for question in record.perturbation_questions:
                 lines.append(f"question {question.question_id}: {question.prompt}")
 
@@ -238,3 +241,52 @@ def _format_top_attributions(record: SampleAuditRecord, limit: int) -> str:
     if not ranked:
         return "none"
     return ", ".join(f"{feature}={value:.3f}" for feature, value in ranked)
+
+
+def _split_instance_and_target(
+    row: TabularRow,
+    model: TabularBlackBoxModel,
+) -> tuple[TabularRow, str | None]:
+    feature_names = set(getattr(model, "feature_names", []))
+    instance = {key: value for key, value in row.items() if not feature_names or key in feature_names}
+
+    target_value = None
+    for target_key in ("target", "label", "ground_truth_label", "y_true"):
+        if target_key in row:
+            target_value = row[target_key]
+            break
+
+    return instance, _normalize_ground_truth_label(model, target_value)
+
+
+def _normalize_ground_truth_label(
+    model: TabularBlackBoxModel,
+    raw_label: object,
+) -> str | None:
+    if raw_label is None:
+        return None
+
+    classes = tuple(str(label) for label in getattr(model, "classes_", ()))
+    if isinstance(raw_label, str) and raw_label in classes:
+        return raw_label
+
+    if isinstance(raw_label, bool):
+        index = int(raw_label)
+        if 0 <= index < len(classes):
+            return classes[index]
+
+    if isinstance(raw_label, int) and not isinstance(raw_label, bool):
+        if 0 <= raw_label < len(classes):
+            return classes[raw_label]
+
+    if isinstance(raw_label, float) and raw_label.is_integer():
+        index = int(raw_label)
+        if 0 <= index < len(classes):
+            return classes[index]
+
+    normalized = str(raw_label)
+    if normalized.isdigit():
+        index = int(normalized)
+        if 0 <= index < len(classes):
+            return classes[index]
+    return normalized
