@@ -44,8 +44,10 @@ def main() -> int:
         explainer=explainer,
         focus_label="approve",
         sample_count=5,
-        csv_output_path="audit_outcomes.csv",
+        csv_output_path="results/audit_outcomes.csv",
     )
+    
+    json.dump(result["csv_artifact"], open('results/data.json', 'w'),indent=2)
     print(json.dumps({"csv_path": result["csv_artifact"]["csv_path"]}, indent=2, sort_keys=True))
     return 0
 

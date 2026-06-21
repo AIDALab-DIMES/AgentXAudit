@@ -121,7 +121,6 @@ def _load_uci_dataset(spec: DatasetSpec) -> LoadedTabularDataset:
     else:
         target = pd.to_numeric(target, errors="raise").astype("int64")
 
-    features = _clean_feature_frame(features)
     inferred_categorical = [
         column
         for column in features.columns
@@ -169,18 +168,10 @@ def _load_breast_cancer_dataset(spec: DatasetSpec) -> LoadedTabularDataset:
     }
     return LoadedTabularDataset(
         spec=spec,
-        features=_clean_feature_frame(features),
+        features=features,
         target=pd.Series(target, name="target"),
         categorical_features=[],
         numeric_features=list(features.columns),
         metadata=metadata,
     )
 
-
-def _clean_feature_frame(features: pd.DataFrame) -> pd.DataFrame:
-    cleaned = features.copy()
-    cleaned.columns = [str(column).strip().replace(" ", "_") for column in cleaned.columns]
-    for column in cleaned.columns:
-        if cleaned[column].dtype == object:
-            cleaned[column] = cleaned[column].astype(str).str.strip()
-    return cleaned

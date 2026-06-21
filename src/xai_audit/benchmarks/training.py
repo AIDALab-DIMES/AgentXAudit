@@ -156,6 +156,8 @@ def train_benchmark_dataset(
 
     artifact_root = Path(output_dir) / dataset_name
     artifact_root.mkdir(parents=True, exist_ok=True)
+    
+    print(f"[INFO] Working on: {artifact_root}") 
 
     model_path = artifact_root / "model.pt"
     preprocessor_path = artifact_root / "preprocessor.joblib"
