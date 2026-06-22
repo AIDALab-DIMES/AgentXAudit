@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 import pandas as pd
 from sklearn.datasets import load_breast_cancer
 from ucimlrepo import fetch_ucirepo
+import kagglehub
 
 
 @dataclass(frozen=True)
@@ -19,6 +20,7 @@ class DatasetSpec:
     loader_kind: str = "uci"
     loader_id: int | None = None
     notes: tuple[str, ...] = ()
+    file: str | None = None
 
 
 @dataclass
@@ -36,22 +38,24 @@ DATASET_SPECS: dict[str, DatasetSpec] = {
         name="german_credit",
         domain="finance",
         source_name="UCI Machine Learning Repository",
-        source_url="https://archive.ics.uci.edu/dataset/144/statlog+german+credit+data",
+        source_url="https://www.kaggle.com/datasets/uciml/german-credit",
         description="Binary credit-risk classification with 1000 applicants and 20 features.",
         positive_class="bad_credit_risk",
-        loader_kind="uci",
-        loader_id=144,
+        loader_kind="kaggle",
+        loader_id='uciml/german-credit',
+        file='german_credit_data.csv'
     ),
     "credit_card_default": DatasetSpec(
         name="credit_card_default",
         domain="finance",
         source_name="UCI Machine Learning Repository",
-        source_url="https://archive.ics.uci.edu/dataset/350/default+of+credit+card+clients",
+        source_url="https://www.kaggle.com/datasets/uciml/default-of-credit-card-clients-dataset",
         description="Taiwan credit-card default prediction with 30000 clients and 23 tabular features.",
         positive_class="default_next_month",
-        loader_kind="uci",
-        loader_id=350,
-        categorical_features=("X2", "X3", "X4", "X6", "X7", "X8", "X9", "X10", "X11"),
+        loader_kind="kaggle",
+        loader_id='uciml/default-of-credit-card-clients-dataset',
+        categorical_features=("SEX", "EDUCATION", "MARRIAGE", "PAY_0", "PAY_2", "PAY_3", "PAY_4", "PAY_5", "PAY_6"),
+        file='UCI_Credit_Card.csv'
     ),
     "heart_disease": DatasetSpec(
         name="heart_disease",
@@ -93,7 +97,64 @@ def load_dataset(name: str) -> LoadedTabularDataset:
         return _load_breast_cancer_dataset(spec)
     raise ValueError(f"Unsupported loader kind: {spec.loader_kind}")
 
+    
+def _load_kaggle_dataset(spec: DatasetSpec) -> LoadedTabularDataset:
+    if spec.loader_id is None:
+        raise ValueError(f"Dataset {spec.name} is missing a UCI loader id.")
 
+    data_path = kagglehub.dataset_download(spec.loader_id)
+    fetched = pd.read_csv(os.path.join(data, spec.file))
+    #fetched = fetch_ucirepo(id=spec.loader_id)
+    features = fetched.iloc[:,:fetched.shape[1]-1].copy()
+    #target_frame = fetched.data.targets.copy()
+    target = fetched.iloc[:, -1].copy()
+
+    if spec.name == "german_credit":
+        target = (
+            target.astype(str)
+            .str.strip()
+            .map({"1": 0, "2": 1, "good": 0, "bad": 1})
+            .astype("int64")
+        )
+    elif spec.name == "credit_card_default":
+        target = pd.to_numeric(target, errors="raise").astype("int64")
+        features = features.drop(columns=["ID"], errors="ignore")
+    elif spec.name == "heart_disease":
+        features = features.replace("?", pd.NA)
+        features = features.apply(pd.to_numeric, errors="coerce")
+        target = pd.to_numeric(target, errors="coerce").fillna(0).astype("int64")
+        target = (target > 0).astype("int64")
+    else:
+        target = pd.to_numeric(target, errors="raise").astype("int64")
+
+    inferred_categorical = [
+        column
+        for column in features.columns
+        if str(features[column].dtype) in {"object", "string", "category"}
+    ]
+    categorical_features = sorted(set(column for column in spec.categorical_features if column in features.columns) | set(inferred_categorical))
+    numeric_features = [column for column in features.columns if column not in categorical_features]
+
+    metadata = {
+        "domain": spec.domain,
+        "source_name": spec.source_name,
+        "source_url": spec.source_url,
+        "description": spec.description,
+        "positive_class": spec.positive_class,
+        "notes": list(spec.notes),
+        "n_rows": int(len(features)),
+        "n_features": int(features.shape[1]),
+    }
+    return LoadedTabularDataset(
+        spec=spec,
+        features=features,
+        target=pd.Series(target, name="target"),
+        categorical_features=categorical_features,
+        numeric_features=numeric_features,
+        metadata=metadata,
+    )
+    
+    
 def _load_uci_dataset(spec: DatasetSpec) -> LoadedTabularDataset:
     if spec.loader_id is None:
         raise ValueError(f"Dataset {spec.name} is missing a UCI loader id.")

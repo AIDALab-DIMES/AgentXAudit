@@ -370,7 +370,7 @@ Coordinator request:
             ),
         )
         response = _normalize_result((prompt | llm).invoke({"coordinator_prompt": coordinator_prompt}))
-        response["persona"] = response.get("persona")
+        response["persona"] = stakeholder.display_name
         response["question_id"] = response.get("question_id") or question_id
         interaction_records.append(
             {
