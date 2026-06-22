@@ -53,6 +53,7 @@ except ImportError:  # Optional until tabular benchmark dependencies are install
 
 try:
     from .explainers import (
+        AnchorAuditExplainer,
         BaseAuditExplainer,
         ExplainerContext,
         LimeAuditExplainer,
@@ -62,6 +63,7 @@ try:
         register_explainer,
     )
 except ImportError:  # Optional until explanation dependencies are installed.
+    AnchorAuditExplainer = None
     BaseAuditExplainer = None
     ExplainerContext = None
     LimeAuditExplainer = None
@@ -75,6 +77,7 @@ __all__ = [
     "AuditRuntimeContext",
     "AuditCsvArtifact",
     "AuditCsvRow",
+    "AnchorAuditExplainer",
     "ArtifactBackedBlackBoxModel",
     "BaseAuditExplainer",
     "DATASET_SPECS",

@@ -148,15 +148,7 @@ def build_perturbation_question(
     focus_label: str | None,
     perturbation_fraction: float,
 ) -> PerturbationQuestion | None:
-    ranked_features = [
-        feature
-        for feature, _ in sorted(
-            explanation.feature_attributions.items(),
-            key=lambda item: abs(item[1]),
-            reverse=True,
-        )
-        if is_numeric(instance.get(feature))
-    ]
+    ranked_features = _candidate_perturbation_features(explanation, instance)
     if not ranked_features:
         return None
 
@@ -188,6 +180,30 @@ def build_perturbation_question(
         expected_score=round(perturbed_prediction.score, 6),
         expected_score_direction=direction,
     )
+
+
+def _candidate_perturbation_features(
+    explanation,
+    instance: TabularRow,
+) -> list[str]:
+    ranked_from_attributions = [
+        feature
+        for feature, _ in sorted(
+            explanation.feature_attributions.items(),
+            key=lambda item: abs(item[1]),
+            reverse=True,
+        )
+        if is_numeric(instance.get(feature))
+    ]
+    if ranked_from_attributions:
+        return ranked_from_attributions
+
+    ranked_from_rules = [
+        str(feature)
+        for feature in explanation.metadata.get("anchor_rule_features", [])
+        if is_numeric(instance.get(str(feature)))
+    ]
+    return ranked_from_rules
 
 
 def user_visible_records(records: Sequence[SampleAuditRecord]) -> list[dict[str, object]]:

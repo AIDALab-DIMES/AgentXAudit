@@ -6,9 +6,10 @@ from .base import (
     build_explainer,
     register_explainer,
 )
-from .methods import LimeAuditExplainer, ShapAuditExplainer
+from .methods import AnchorAuditExplainer, LimeAuditExplainer, ShapAuditExplainer
 
 __all__ = [
+    "AnchorAuditExplainer",
     "BaseAuditExplainer",
     "ExplainedFeature",
     "ExplainerContext",

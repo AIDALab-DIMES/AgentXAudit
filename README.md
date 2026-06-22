@@ -142,7 +142,7 @@ This script:
 3. uses the saved holdout split as the validation set
 4. lets the audit coordinator autonomously select representative validation samples
 5. uses the deployment scenario to instantiate the relevant stakeholder personas
-6. dynamically generates explanations for those samples with SHAP or LIME
+6. dynamically generates explanations for those samples with SHAP, LIME, or Anchor
 7. launches the same iterative audit workflow used in `examples/run_demo.py`
 8. writes one audit CSV per explanation method
 
@@ -150,6 +150,7 @@ Outputs are saved under `artifacts/audit_outputs/<dataset_name>/`:
 
 - `audit_shap.csv`
 - `audit_lime.csv`
+- `audit_anchor.csv`
 - `audit_manifest.json`
 
 ## Extendability Principle
@@ -162,6 +163,14 @@ The dynamic explanation layer is designed to be extended with new methods:
 - each explainer returns the common `LocalExplanation` structure already consumed by the audit framework
 
 So to add another method, you only need to implement a new adapter class under `src/xai_audit/explainers/` and register it.
+
+The current built-in dynamic explainers are:
+
+- `shap`
+- `lime`
+- `anchor`
+
+`anchor` explanations are surfaced as rule-based explanations rather than being converted into feature-attribution scores.
 
 ## Dataset Sources
 

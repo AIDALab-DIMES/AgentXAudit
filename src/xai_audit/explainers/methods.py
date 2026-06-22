@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import pandas as pd
 
@@ -113,6 +114,77 @@ class LimeAuditExplainer(BaseAuditExplainer):
         )
 
 
+@register_explainer("anchor")
+@dataclass
+class AnchorAuditExplainer(BaseAuditExplainer):
+    threshold: float = 0.95
+    tau: float = 0.1
+    batch_size: int = 100
+
+    def __init__(
+        self,
+        *,
+        context,
+        threshold: float = 0.95,
+        tau: float = 0.1,
+        batch_size: int = 100,
+    ) -> None:
+        super().__init__(context=context)
+        self.threshold = threshold
+        self.tau = tau
+        self.batch_size = batch_size
+
+    def explain_instance(
+        self,
+        model,
+        instance: TabularRow,
+        *,
+        reference_row: TabularRow | None = None,
+        focus_label: str | None = None,
+    ) -> LocalExplanation:
+        from anchor import anchor_tabular
+
+        prediction = predict_single(model, instance, focus_label=focus_label)
+        instance_frame = pd.DataFrame([instance], columns=self.context.feature_names)
+        encoded_background = self.context.lime_training_data()
+        encoded_instance = self.context.encode_for_lime(instance_frame).iloc[0].to_numpy()
+
+        explainer = anchor_tabular.AnchorTabularExplainer(
+            class_names=self.context.class_names,
+            feature_names=self.context.feature_names,
+            train_data=encoded_background,
+            categorical_names=self.context.categorical_names,
+        )
+        explanation = explainer.explain_instance(
+            encoded_instance,
+            lambda values: self.context.predict_class_probabilities(self.context.decode_lime_array(values)),
+            threshold=self.threshold,
+            tau=self.tau,
+            batch_size=self.batch_size,
+        )
+
+        rules = [str(rule).strip() for rule in explanation.names() if str(rule).strip()]
+        rule_features = _anchor_rule_features(rules, self.context.feature_names)
+        precision = _safe_float(getattr(explanation, "precision", lambda: None)())
+        coverage = _safe_float(getattr(explanation, "coverage", lambda: None)())
+
+        return LocalExplanation(
+            method_name=self.name,
+            prediction=prediction,
+            feature_attributions={},
+            baseline_value=precision,
+            explanation_text=_render_anchor_text(rules, precision, coverage),
+            metadata={
+                "algorithm": "anchor_tabular",
+                "all_feature_names": self.context.feature_names,
+                "anchor_rules": rules,
+                "anchor_rule_features": rule_features,
+                "precision": precision,
+                "coverage": coverage,
+            },
+        )
+
+
 def _render_text(attributions: dict[str, float], label: str) -> str:
     if not attributions:
         return f"The explainer did not return usable attributions."
@@ -121,3 +193,45 @@ def _render_text(attributions: dict[str, float], label: str) -> str:
         direction = "positively affects" if value > 0 else "negatively affects"
         clauses.append(f"{feature} {direction} the observed prediction with an importance of {abs(value):.3f}")
     return f"{'; '.join(clauses)}." # Predicted label: {label}. 
+
+
+def _anchor_rule_features(
+    rules: list[str],
+    feature_names: list[str],
+) -> list[str]:
+    matched: list[str] = []
+    for rule in rules:
+        normalized_rule = rule.strip()
+        for feature_name in feature_names:
+            if normalized_rule.startswith(feature_name) or f" {feature_name} " in f" {normalized_rule} ":
+                if feature_name not in matched:
+                    matched.append(feature_name)
+                break
+    return matched
+
+
+def _render_anchor_text(
+    rules: list[str],
+    precision: float | None,
+    coverage: float | None,
+) -> str:
+    if not rules:
+        return "The anchor explainer did not return a stable rule."
+
+    summary = " AND ".join(rules[:3])
+    metrics: list[str] = []
+    if precision is not None:
+        metrics.append(f"precision={precision:.3f}")
+    if coverage is not None:
+        metrics.append(f"coverage={coverage:.3f}")
+    metric_text = f" ({', '.join(metrics)})" if metrics else ""
+    return f"Prediction is anchored by the rule: {summary}{metric_text}."
+
+
+def _safe_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
