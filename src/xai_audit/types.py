@@ -68,6 +68,7 @@ class StakeholderProfile:
     role: str
     expertise_summary: str
     decision_context: str
+    narrative_description: str
     explanation_needs: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:

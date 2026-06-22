@@ -57,6 +57,7 @@ class StakeholderProfileSchema:
     expertise_summary: str
     decision_context: str
     explanation_needs: list[str]
+    narrative_description: str
 
 
 @dataclass
@@ -89,21 +90,18 @@ class UnderstandabilityQuestionAnswerSchema:
 DIMENSION_INSTRUCTIONS = {
     "trust": """
 This interaction evaluates trust only.
-Judge whether the model prediction appears correct for the presented sample.
+Judge whether the model prediction appears correct for the presented sample solely relying on the provided explanation.
 Return only whether you believe the prediction is correct or not.
-Do not evaluate usability or understandability here.
 """.strip(),
     "usability": """
 This interaction evaluates usability only.
 Judge whether the explanation supports downstream decisions or actions for this stakeholder on the presented sample.
 Return a usability score from 1 to 5, where 1 means not usable and 5 means highly usable.
-Do not evaluate trust or understandability here.
 """.strip(),
     "understandability": """
 This interaction evaluates understandability only.
 Use the explanation to predict how the black-box model would behave under the provided perturbation.
 Return the predicted label and whether the focal score would increase, decrease, or stay about the same.
-Do not evaluate trust or usability here.
 """.strip(),
 }
 
@@ -219,7 +217,7 @@ def _infer_stakeholders_with_llm(
     state: AuditState,
     runtime: Runtime[AuditRuntimeContext],
 ) -> list[StakeholderProfile]:
-    planner_llm = _bounded_structured_llm(runtime.context.llm, StakeholderPlanningSchema, max_tokens=450)
+    planner_llm = _bounded_structured_llm(runtime.context.llm, StakeholderPlanningSchema, max_tokens=600)
     prompt = ChatPromptTemplate.from_messages(
         [
             (
@@ -228,6 +226,8 @@ def _infer_stakeholders_with_llm(
 You are the audit agent orchestrating a human-centered XAI assessment.
 From the deployment scenario, identify the stakeholder categories that directly receive explanations or act on them.
 Distinguish stakeholders with different expertise and decision responsibilities.
+Additionally, for each stakeholder, produce a brief narrative description of the user to impersonate, summarizing all its characteristics and its needs. Be concise in the description.
+
 Keep stakeholder_id short and snake_case.
 """.strip(),
             ),
@@ -287,12 +287,10 @@ def _run_trust_stage(
     llm = _bounded_structured_llm(runtime.context.llm, TrustSampleAssessmentSchema, max_tokens=80)
     prompt = ChatPromptTemplate.from_messages(
         [
-            ("system", _build_stakeholder_system_prompt(stakeholder, state.get("scenario_description"))),
+            ("system", _build_stakeholder_system_prompt(stakeholder, "trust", state.get("scenario_description"))),
             (
                 "human",
                 """
-You are interacting with the audit coordinator in one stage of a multi-step evaluation.
-
 Coordinator request:
 {coordinator_prompt}
                 """.strip(),
@@ -304,20 +302,26 @@ Coordinator request:
     for record in _dicts_to_sample_records(state["sampled_cases"]):
         question_id = f"{record.sample_id}_trust"
         sample_packet = build_persona_stage_packet([record], dimension="trust")
+        print(f'[SAMPLE PACKET]: {sample_packet}\n----------------------------')
         coordinator_prompt = _build_coordinator_prompt(
             stakeholder=stakeholder,
             dimension="trust",
             user_query=state["user_query"],
-            scenario_description=state.get("scenario_description"),
+            #scenario_description=state.get("scenario_description"),
             sampled_cases_text=sample_packet,
             question_text=(
                 f"Question id: {question_id}\n"
                 "Based only on the sample, the prediction, and the explanation, do you believe the model prediction is correct for this case?"
             ),
         )
-        response = _normalize_result((prompt | llm).invoke({"coordinator_prompt": coordinator_prompt}))
-        response["persona"] = response.get("persona") or stakeholder.display_name
+        print(f'[COORDINATOR PROMPT]: {coordinator_prompt}\n-----------------------------')
+        fprompt = prompt.format_messages(coordinator_prompt=coordinator_prompt)##invoke({"coordinator_prompt": coordinator_prompt})
+        print(f'[FINAL PROMPT]:\n {fprompt}\n---------------------')
+        response = _normalize_result(llm.invoke(fprompt))
+        response["persona"] = stakeholder.display_name
         response["question_id"] = response.get("question_id") or question_id
+        print(f'[PERSONA RESPONSE]: {response}\n-------------------------')
+        
         interaction_records.append(
             {
                 "persona": response["persona"],
@@ -338,12 +342,11 @@ def _run_usability_stage(
     llm = _bounded_structured_llm(runtime.context.llm, UsabilitySampleAssessmentSchema, max_tokens=80)
     prompt = ChatPromptTemplate.from_messages(
         [
-            ("system", _build_stakeholder_system_prompt(stakeholder, state.get("scenario_description"))),
+            ("system", _build_stakeholder_system_prompt(stakeholder, "usability", state.get("scenario_description"))),
             (
                 "human",
                 """
-You are interacting with the audit coordinator in one stage of a multi-step evaluation.
-
+                
 Coordinator request:
 {coordinator_prompt}
                 """.strip(),
@@ -359,7 +362,7 @@ Coordinator request:
             stakeholder=stakeholder,
             dimension="usability",
             user_query=state["user_query"],
-            scenario_description=state.get("scenario_description"),
+            #scenario_description=state.get("scenario_description"),
             sampled_cases_text=sample_packet,
             question_text=(
                 f"Question id: {question_id}\n"
@@ -367,7 +370,7 @@ Coordinator request:
             ),
         )
         response = _normalize_result((prompt | llm).invoke({"coordinator_prompt": coordinator_prompt}))
-        response["persona"] = response.get("persona") or stakeholder.display_name
+        response["persona"] = response.get("persona")
         response["question_id"] = response.get("question_id") or question_id
         interaction_records.append(
             {
@@ -389,11 +392,10 @@ def _run_understandability_stage(
     llm = _bounded_structured_llm(runtime.context.llm, UnderstandabilityQuestionAnswerSchema, max_tokens=60)
     prompt = ChatPromptTemplate.from_messages(
         [
-            ("system", _build_stakeholder_system_prompt(stakeholder, state.get("scenario_description"))),
+            ("system", _build_stakeholder_system_prompt(stakeholder, "understandability", state.get("scenario_description"))),
             (
                 "human",
                 """
-You are interacting with the audit coordinator in one stage of a multi-step evaluation.
 
 Coordinator request:
 {coordinator_prompt}
@@ -411,12 +413,12 @@ Coordinator request:
             stakeholder=stakeholder,
             dimension="understandability",
             user_query=state["user_query"],
-            scenario_description=state.get("scenario_description"),
+            #scenario_description=state.get("scenario_description"),
             sampled_cases_text=question_packet,
             question_text="Answer only the single perturbation question shown in the case packet.",
         )
         response = _normalize_result((prompt | llm).invoke({"coordinator_prompt": question_request}))
-        response["persona"] = response.get("persona") or stakeholder.display_name
+        response["persona"] = stakeholder.display_name
         interaction_records.append(
             {
                 "persona": response["persona"],
@@ -460,17 +462,17 @@ def _build_coordinator_prompt(
     stakeholder: StakeholderProfile,
     dimension: Literal["trust", "usability", "understandability"],
     user_query: str,
-    scenario_description: str | None,
+    #scenario_description: str | None,
     sampled_cases_text: str,
     question_text: str,
 ) -> str:
     return (
-        f"User query:\n{user_query}\n\n"
-        f"Deployment scenario:\n{scenario_description or 'Not provided.'}\n\n"
-        f"Stakeholder under evaluation:\n{_format_stakeholder_block(stakeholder)}\n\n"
-        f"Evaluation dimension:\n{dimension}\n\n"
-        f"Stage instructions:\n{DIMENSION_INSTRUCTIONS[dimension]}\n\n"
-        "Ground your assessment only in the provided case.\n\n"
+        #f"User query:\n{user_query}\n\n"
+        #f"Deployment scenario:\n{scenario_description or 'Not provided.'}\n\n"
+        #f"You are impersonating the following user:\n{stakeholder.narrative_description}\n\n"#{_format_stakeholder_block(stakeholder)}\n\n"
+        #f"Evaluation dimension:\n{dimension}\n\n"
+        #f"Stage instructions:\n{DIMENSION_INSTRUCTIONS[dimension]}\n\n"
+        #"Ground your assessment only in the provided case.\n\n"
         f"Case packet:\n{sampled_cases_text}\n\n"
         f"{question_text}"
     )
@@ -478,15 +480,20 @@ def _build_coordinator_prompt(
 
 def _build_stakeholder_system_prompt(
     stakeholder: StakeholderProfile,
+    dimension: Literal["trust", "usability", "understandability"],
     scenario_description: str | None,
 ) -> str:
     explanation_needs = "; ".join(stakeholder.explanation_needs) or "No specific needs provided."
     return (
-        f"You are simulating {stakeholder.display_name}, acting as a {stakeholder.role}.\n"
-        f"Scenario context: {scenario_description or 'Not provided.'}\n"
-        f"Expertise: {stakeholder.expertise_summary}\n"
-        f"Decision context: {stakeholder.decision_context}\n"
-        f"Explanation needs: {explanation_needs}\n"
+        f"You are simulating the following user. {stakeholder.narrative_description}\n"#{stakeholder.display_name}, acting as a {stakeholder.role}.\n"
+        #f"Scenario context: {scenario_description or 'Not provided.'}\n"
+        #f"Expertise: {stakeholder.expertise_summary}\n"
+        #f"Decision context: {stakeholder.decision_context}\n"
+        #f"Explanation needs: {explanation_needs}\n"
+        "You are interacting with the audit coordinator in one stage of a multi-step evaluation."
+
+        f"Stage instructions:\n{DIMENSION_INSTRUCTIONS[dimension]}\n\n"
+        
         "Ground all judgments only in the provided case packet.\n"
         "Stay consistent with this stakeholder's expertise, responsibilities, and information needs."
     )
@@ -518,6 +525,7 @@ def _coerce_stakeholder_profiles(payload: list[dict[str, Any]] | list[Stakeholde
                 expertise_summary=str(item.get("expertise_summary") or "General familiarity with the use case."),
                 decision_context=str(item.get("decision_context") or "Receives explanations and reacts to them."),
                 explanation_needs=[str(entry) for entry in item.get("explanation_needs", [])],
+                narrative_description = str(item.get("narrative_description"))
             )
         )
     return output

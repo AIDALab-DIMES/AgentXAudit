@@ -115,9 +115,9 @@ class LimeAuditExplainer(BaseAuditExplainer):
 
 def _render_text(attributions: dict[str, float], label: str) -> str:
     if not attributions:
-        return f"Predicted label: {label}. The explainer did not return usable attributions."
+        return f"The explainer did not return usable attributions."
     clauses = []
     for feature, value in list(attributions.items())[:3]:
-        direction = "increases" if value > 0 else "decreases"
-        clauses.append(f"{feature} {direction} the score by {abs(value):.3f}")
-    return f"Predicted label: {label}. Main local factors: {'; '.join(clauses)}."
+        direction = "positively affects" if value > 0 else "negatively affects"
+        clauses.append(f"{feature} {direction} the observed prediction with an importance of {abs(value):.3f}")
+    return f"{'; '.join(clauses)}." # Predicted label: {label}. 

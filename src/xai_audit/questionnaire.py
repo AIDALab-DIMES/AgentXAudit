@@ -225,10 +225,10 @@ def build_persona_stage_packet(
         )
 
         lines = [
-            f"{record.sample_id}",
-            f"instance: {_format_instance(record.instance)}",
-            f"model_output: {model_output}",
-            f"explanation: {explanation_line}",
+            #f"{record.sample_id}",
+            f"INSTANCE: {_format_instance(record.instance)}\n",
+            f"MODEL OUTPUT: {model_output}\n",
+            f"EXPLANATION: {explanation_line}",
         ]
 
         if dimension == "understandability":
