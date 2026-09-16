@@ -1,6 +1,6 @@
-# XAI Audit Prototype
+# AgentXAudit
 
-This project implements a prototype framework for auditing the explanations emitted by a fixed explainability method on tabular data.
+This project implements a framework for auditing the explanations emitted by a fixed explainability method. The current implementation supports tabular data; further data types will be included in future releases. 
 
 The current workflow is validation-set driven, scenario-aware, and iterative:
 
